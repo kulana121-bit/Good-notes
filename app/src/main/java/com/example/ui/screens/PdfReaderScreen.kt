@@ -390,12 +390,12 @@ fun PdfReaderScreen(
                                             renderMutex.withLock {
                                                 val page = currentRenderer.openPage(pageIndex)
                                                 // Optimized width (720px) for smooth performance on low-end devices
-                                                val targetWidth = 720
+                                                val targetWidth = 1080
                                                 val ratio = page.height.toFloat() / page.width.toFloat()
                                                 val targetHeight = (targetWidth * ratio).toInt().coerceAtLeast(1)
 
                                                 // RGB_565 uses half memory of ARGB_8888
-                                                val bmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.RGB_565)
+                                                val bmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
                                                 bmp.eraseColor(android.graphics.Color.WHITE)
                                                 page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                                                 page.close()
@@ -434,24 +434,42 @@ private fun PdfPageCard(
             .fillMaxWidth()
             .shadow(4.dp, shape)
             .clip(shape)
-            .background(Color.White),
+            .background(MaterialTheme.colorScheme.surface),
         contentAlignment = Alignment.Center
     ) {
         if (bitmap != null && !bitmap.isRecycled) {
             Column {
-                Image(
-                    bitmap = bitmap.asImageBitmap(),
-                    contentDescription = "Page ${pageIndex + 1} of $totalPages",
-                    contentScale = ContentScale.FillWidth,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Box {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Page ${pageIndex + 1} of $totalPages",
+                        contentScale = ContentScale.FillWidth,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.Black.copy(alpha = 0.6f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "${pageIndex + 1} / $totalPages",
+                            color = MaterialTheme.colorScheme.surface,
+                            fontSize = 10.sp,
+                            fontFamily = OutfitFontFamily,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         } else {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(0.707f)
-                    .background(Color(0xFFF0EFEA)),
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
