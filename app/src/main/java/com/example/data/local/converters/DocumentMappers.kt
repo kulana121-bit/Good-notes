@@ -9,6 +9,13 @@ import java.util.Locale
 
 object DocumentMappers {
     fun toDomain(entity: DocumentEntity): Document {
+        val hex = entity.accentColorHex
+        val color = if (hex ushr 32 == 0L) {
+            Color(hex)
+        } else {
+            Color(hex.toULong())
+        }
+
         return Document(
             id = entity.id,
             fileName = entity.fileName,
@@ -27,7 +34,7 @@ object DocumentMappers {
             isDeleted = entity.isDeleted,
             syncStatus = entity.syncStatus,
             remoteStorageRef = entity.remoteStorageRef,
-            accentColor = Color(entity.accentColorHex.toULong())
+            accentColor = color
         )
     }
 
