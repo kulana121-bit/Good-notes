@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Notebook main warm cream body (centered in safe zone 28,24 to 80,84) -->
+    <path
+        android:fillColor="#F6ECC9"
+        android:pathData="M34,24 L66,24 C72.6,24 78,29.4 78,36 L78,74 C78,80.6 72.6,86 66,86 L34,86 C27.4,86 22,80.6 22,74 L22,36 C22,29.4 27.4,24 34,24 Z" />
+    <!-- Yellow tactile top fold / accent -->
+    <path
+        android:fillColor="#F7D44C"
+        android:pathData="M34,24 L66,24 C72.6,24 78,29.4 78,36 L78,42 L22,42 L22,36 C22,29.4 27.4,24 34,24 Z" />
+    <!-- Coral / orange bookmark tab -->
+    <path
+        android:fillColor="#EB7A53"
+        android:pathData="M48,20 L60,20 C61.1,20 62,20.9 62,22 L62,38 L54,34 L46,38 L46,22 C46,20.9 46.9,20 48,20 Z" />
+    <!-- Editorial note lines on the cream paper -->
+    <path
+        android:fillColor="#111111"
+        android:pathData="M32,52 L68,52 C69.1,52 70,52.9 70,54 C70,55.1 69.1,56 68,56 L32,56 C30.9,56 30,55.1 30,54 C30,52.9 30.9,52 32,52 Z" />
+    <path
+        android:fillColor="#111111"
+        android:pathData="M32,62 L60,62 C61.1,62 62,62.9 62,64 C62,65.1 61.1,66 60,66 L32,66 C30.9,66 30,65.1 30,64 C30,62.9 30.9,62 32,62 Z" />
+    <path
+        android:fillColor="#111111"
+        android:pathData="M32,72 L48,72 C49.1,72 50,72.9 50,74 C50,75.1 49.1,76 48,76 L32,76 C30.9,76 30,75.1 30,74 C30,72.9 30.9,72 32,72 Z" />
+</vector>
+

@@ -1,0 +1,6 @@
+{
+  "name": "Notes",
+  "description": "Editorial, tactile digital-paper notes application inspired by GoodNotes and Dribbble design.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
