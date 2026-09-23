@@ -56,6 +56,9 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
       - name: Create temporary release keystore
         run: |
           echo "=== Generating temporary release keystore ==="
@@ -73,6 +76,7 @@ jobs:
             echo "ERROR: Failed to create ./release.keystore."
             exit 1
           fi
+          cp ./release.keystore ./app/release.keystore
           echo "release.keystore created successfully."
           echo "KEYSTORE_FILE=$(pwd)/release.keystore" >> $GITHUB_ENV
           echo "KEYSTORE_PASSWORD=release123" >> $GITHUB_ENV
@@ -80,7 +84,7 @@ jobs:
           echo "KEY_PASSWORD=release123" >> $GITHUB_ENV
 
       - name: Build release APK
-        run: gradle :app:assembleRelease --stacktrace --no-daemon
+        run: ./gradlew :app:assembleRelease --stacktrace --no-daemon
 
       - name: Verify APK
         run: |

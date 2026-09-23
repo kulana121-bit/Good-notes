@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -65,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.data.model.Document
+import com.example.ui.components.StaggeredAnimatedItem
 import com.example.ui.theme.NoteCoral
 import com.example.ui.theme.NoteYellow
 import com.example.ui.theme.OutfitFontFamily
@@ -369,13 +371,15 @@ fun DocumentsScreen(
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    items(documents, key = { it.id }) { doc ->
-                        DocumentCardItem(
-                            doc = doc,
-                            onClick = { onDocumentClick(doc) },
-                            onToggleFavorite = { onToggleFavorite(doc.id) },
-                            onDelete = { documentToDelete = doc }
-                        )
+                    itemsIndexed(documents, key = { _, doc -> doc.id }) { index, doc ->
+                        StaggeredAnimatedItem(index = index) {
+                            DocumentCardItem(
+                                doc = doc,
+                                onClick = { onDocumentClick(doc) },
+                                onToggleFavorite = { onToggleFavorite(doc.id) },
+                                onDelete = { documentToDelete = doc }
+                            )
+                        }
                     }
                 }
             }

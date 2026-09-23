@@ -85,9 +85,11 @@ fun FloatingActionCapsule(
                     ambientColor = Color(0x66000000),
                     spotColor = Color(0x66000000)
                 )
-                .clip(RoundedCornerShape(36.dp))
-                .background(
-                    if (isDark) Color(0x991E1E22) else Color(0x22000000)
+                .glassmorphism(
+                    shape = RoundedCornerShape(36.dp),
+                    blurRadius = 20.dp,
+                    isDark = isDark,
+                    alpha = if (isDark) 0.85f else 0.88f
                 )
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,

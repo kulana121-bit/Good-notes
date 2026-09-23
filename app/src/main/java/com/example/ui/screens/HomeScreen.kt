@@ -82,6 +82,8 @@ import com.example.ui.components.FilterPillRow
 import com.example.ui.components.FloatingActionCapsule
 import com.example.ui.components.NoteCard
 import com.example.ui.components.NotesHeader
+import com.example.ui.components.StaggeredAnimatedItem
+import com.example.ui.components.glassmorphism
 import com.example.ui.theme.NoteCoral
 import com.example.ui.theme.NoteLavender
 import com.example.ui.theme.OutfitFontFamily
@@ -219,48 +221,51 @@ fun HomeScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             items(documents.take(5), key = { it.id }) { doc ->
-                                Box(
-                                    modifier = Modifier
-                                        .width(160.dp)
-                                        .shadow(2.dp, RoundedCornerShape(16.dp))
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(doc.accentColor.copy(alpha = 0.3f))
-                                        .clickable { onDocumentClick(doc) }
-                                        .padding(16.dp)
-                                ) {
-                                    Column(
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                StaggeredAnimatedItem(index = 0, baseDelayMs = 25) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(164.dp)
+                                            .shadow(3.dp, RoundedCornerShape(18.dp))
+                                            .clip(RoundedCornerShape(18.dp))
+                                            .background(doc.accentColor.copy(alpha = 0.25f))
+                                            .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(18.dp))
+                                            .clickable { onDocumentClick(doc) }
+                                            .padding(16.dp)
                                     ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(40.dp)
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(doc.accentColor),
-                                            contentAlignment = Alignment.Center
+                                        Column(
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Outlined.PictureAsPdf,
-                                                contentDescription = "PDF",
-                                                tint = Color(0xFF141414),
-                                                modifier = Modifier.size(24.dp)
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(40.dp)
+                                                    .clip(RoundedCornerShape(12.dp))
+                                                    .background(doc.accentColor),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Outlined.PictureAsPdf,
+                                                    contentDescription = "PDF",
+                                                    tint = Color(0xFF141414),
+                                                    modifier = Modifier.size(24.dp)
+                                                )
+                                            }
+                                            Text(
+                                                text = doc.displayName,
+                                                style = MaterialTheme.typography.titleSmall.copy(
+                                                    fontFamily = OutfitFontFamily,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                ),
+                                                maxLines = 2
+                                            )
+                                            Text(
+                                                text = "${doc.pageCount} ${if (doc.pageCount == 1) "page" else "pages"} • ${doc.lastOpenedAtFormatted}",
+                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                    fontFamily = OutfitFontFamily,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
                                             )
                                         }
-                                        Text(
-                                            text = doc.displayName,
-                                            style = MaterialTheme.typography.titleSmall.copy(
-                                                fontFamily = OutfitFontFamily,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            ),
-                                            maxLines = 2
-                                        )
-                                        Text(
-                                            text = "${doc.pageCount} ${if (doc.pageCount == 1) "page" else "pages"} • ${doc.lastOpenedAtFormatted}",
-                                            style = MaterialTheme.typography.bodySmall.copy(
-                                                fontFamily = OutfitFontFamily,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        )
                                     }
                                 }
                             }
@@ -270,7 +275,7 @@ fun HomeScreen(
                 }
             }
 
-            // Bento / Masonry Note Cards
+            // Bento / Masonry Note Cards with Staggered Entrance Animation
             if (filteredNotes.isEmpty()) {
                 item {
                     EmptyState(
@@ -289,11 +294,43 @@ fun HomeScreen(
                             .padding(horizontal = 20.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        filteredNotes.chunked(2).forEach { chunk ->
+                        filteredNotes.chunked(2).forEachIndexed { rowIndex, chunk ->
                             if (chunk.size == 2) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(14.dp)
+                                ) {
+                                    StaggeredAnimatedItem(
+                                        index = rowIndex * 2,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        NoteCard(
+                                            note = chunk[0],
+                                            onClick = { onNoteClick(chunk[0]) },
+                                            onToggleFavorite = onToggleFavorite,
+                                            onToggleChecklistItem = onToggleChecklistItem,
+                                            onDeleteNote = onDeleteNote,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                    StaggeredAnimatedItem(
+                                        index = rowIndex * 2 + 1,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        NoteCard(
+                                            note = chunk[1],
+                                            onClick = { onNoteClick(chunk[1]) },
+                                            onToggleFavorite = onToggleFavorite,
+                                            onToggleChecklistItem = onToggleChecklistItem,
+                                            onDeleteNote = onDeleteNote,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                            } else if (chunk.isNotEmpty()) {
+                                StaggeredAnimatedItem(
+                                    index = rowIndex * 2,
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
                                     NoteCard(
                                         note = chunk[0],
@@ -301,26 +338,9 @@ fun HomeScreen(
                                         onToggleFavorite = onToggleFavorite,
                                         onToggleChecklistItem = onToggleChecklistItem,
                                         onDeleteNote = onDeleteNote,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    NoteCard(
-                                        note = chunk[1],
-                                        onClick = { onNoteClick(chunk[1]) },
-                                        onToggleFavorite = onToggleFavorite,
-                                        onToggleChecklistItem = onToggleChecklistItem,
-                                        onDeleteNote = onDeleteNote,
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.fillMaxWidth()
                                     )
                                 }
-                            } else if (chunk.isNotEmpty()) {
-                                NoteCard(
-                                    note = chunk[0],
-                                    onClick = { onNoteClick(chunk[0]) },
-                                    onToggleFavorite = onToggleFavorite,
-                                    onToggleChecklistItem = onToggleChecklistItem,
-                                    onDeleteNote = onDeleteNote,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
                             }
                         }
                     }

@@ -58,6 +58,11 @@ class NotesViewModel(
         viewModelScope.launch {
             repository.seedInitialDataIfNeeded()
         }
+        viewModelScope.launch {
+            repository.isDarkMode().collect { persistedMode ->
+                _isDarkModeState.value = persistedMode
+            }
+        }
         // Schedule 15-minute background periodic sync via WorkManager
         NotesSyncWorker.schedulePeriodicSync(application)
     }
@@ -109,9 +114,9 @@ class NotesViewModel(
     val lastSyncTimestamp: StateFlow<Long> = syncManager.lastSyncTimestamp
     val lastSyncReport: StateFlow<SyncReport?> = syncManager.lastSyncReport
 
-    // Settings persistence
-    val isDarkMode: StateFlow<Boolean> = repository.isDarkMode()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+    // Instant in-memory theme state synced with Room database for zero-latency switching
+    private val _isDarkModeState = MutableStateFlow(true)
+    val isDarkMode: StateFlow<Boolean> = _isDarkModeState.asStateFlow()
 
     val isAutoSave: StateFlow<Boolean> = repository.isAutoSave()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
@@ -523,6 +528,7 @@ class NotesViewModel(
     }
 
     fun setDarkMode(enabled: Boolean) {
+        _isDarkModeState.value = enabled
         viewModelScope.launch {
             repository.setDarkMode(enabled)
         }
