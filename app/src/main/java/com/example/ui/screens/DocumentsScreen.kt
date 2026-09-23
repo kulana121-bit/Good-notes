@@ -132,7 +132,7 @@ fun DocumentsScreen(
             ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
         }
 
-        if (allGranted || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (allGranted) {
             isScanning = true
             onScanDeviceDocuments { count ->
                 isScanning = false
