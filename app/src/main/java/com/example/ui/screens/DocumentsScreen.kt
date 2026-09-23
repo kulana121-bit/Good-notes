@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -24,11 +27,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PictureAsPdf
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -36,10 +42,12 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,11 +58,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.data.model.Document
+import com.example.ui.theme.NoteCoral
 import com.example.ui.theme.NoteYellow
 import com.example.ui.theme.OutfitFontFamily
 import kotlinx.coroutines.launch
@@ -63,14 +74,20 @@ import kotlinx.coroutines.launch
 fun DocumentsScreen(
     documents: List<Document>,
     onImportDocument: (Uri) -> Unit,
+    onScanDeviceDocuments: ((Int) -> Unit) -> Unit,
     onDocumentClick: (Document) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onDeleteDocument: (String) -> Unit,
+    onPermanentlyDeleteDocument: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    var isScanning by remember { mutableStateOf(false) }
+    var documentToDelete by remember { mutableStateOf<Document?>(null) }
 
     val pdfPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -78,9 +95,61 @@ fun DocumentsScreen(
         if (uri != null) {
             onImportDocument(uri)
             coroutineScope.launch {
-                snackbarHostState.showSnackbar("PDF document imported successfully")
+                snackbarHostState.showSnackbar("PDF loaded from device")
             }
         }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.values.any { it }
+        if (granted) {
+            isScanning = true
+            onScanDeviceDocuments { count ->
+                isScanning = false
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar(
+                        if (count > 0) "Found $count PDF documents on device" else "No new PDFs found on device"
+                    )
+                }
+            }
+        } else {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("Storage permission allows finding all device PDFs automatically")
+            }
+        }
+    }
+
+    fun triggerDeviceScan() {
+        val permissionsToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
+        val allGranted = permissionsToRequest.all {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }
+
+        if (allGranted || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            isScanning = true
+            onScanDeviceDocuments { count ->
+                isScanning = false
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar(
+                        if (count > 0) "Found $count PDF documents on device" else "All device PDFs up to date"
+                    )
+                }
+            }
+        } else {
+            permissionLauncher.launch(permissionsToRequest)
+        }
+    }
+
+    // Auto scan once when entering screen
+    LaunchedEffect(Unit) {
+        triggerDeviceScan()
     }
 
     Box(
@@ -134,7 +203,7 @@ fun DocumentsScreen(
                             )
                         )
                         Text(
-                            text = "${documents.size} ${if (documents.size == 1) "document" else "documents"} • PDF Library",
+                            text = "${documents.size} ${if (documents.size == 1) "document" else "documents"} • Direct Device Storage",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 fontFamily = OutfitFontFamily,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
@@ -143,40 +212,82 @@ fun DocumentsScreen(
                     }
                 }
 
-                // Import Button
-                Button(
-                    onClick = {
-                        pdfPickerLauncher.launch(arrayOf("application/pdf"))
-                    },
-                    shape = RoundedCornerShape(20.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                    modifier = Modifier.testTag("import_document_button")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    // Sync / Scan button
+                    IconButton(
+                        onClick = { triggerDeviceScan() },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.FileUpload,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
+                            imageVector = Icons.Outlined.Refresh,
+                            contentDescription = "Scan Device PDFs",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(20.dp)
                         )
-                        Text(
-                            text = "Import PDF",
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontFamily = OutfitFontFamily,
-                                fontWeight = FontWeight.SemiBold
+                    }
+
+                    // Import Button
+                    Button(
+                        onClick = {
+                            pdfPickerLauncher.launch(arrayOf("application/pdf"))
+                        },
+                        shape = RoundedCornerShape(20.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                        modifier = Modifier.testTag("import_document_button")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.FileUpload,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
                             )
-                        )
+                            Text(
+                                text = "Open PDF",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontFamily = OutfitFontFamily,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Notice about direct storage & real-time sync
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = "📄 PDFs are read directly from device storage without copies. Deleting permanently removes the file from device.",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = OutfitFontFamily,
+                        fontSize = 11.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             if (documents.isEmpty()) {
                 Box(
@@ -205,7 +316,7 @@ fun DocumentsScreen(
                         }
 
                         Text(
-                            text = "No Documents Yet",
+                            text = "No PDF Documents Found",
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontFamily = OutfitFontFamily,
                                 fontWeight = FontWeight.Bold,
@@ -214,7 +325,7 @@ fun DocumentsScreen(
                         )
 
                         Text(
-                            text = "Import PDF textbooks, syllabi, notes, or lecture slides to annotate and read on digital paper.",
+                            text = "Auto-scan your device or select a PDF file directly to annotate and read on digital paper.",
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontFamily = OutfitFontFamily,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
@@ -222,24 +333,32 @@ fun DocumentsScreen(
                             modifier = Modifier.padding(horizontal = 24.dp)
                         )
 
-                        Button(
-                            onClick = {
-                                pdfPickerLauncher.launch(arrayOf("application/pdf"))
-                            },
-                            shape = RoundedCornerShape(20.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            modifier = Modifier.padding(top = 8.dp)
-                        ) {
-                            Text(
-                                text = "Select PDF from Device",
-                                style = MaterialTheme.typography.labelLarge.copy(
-                                    fontFamily = OutfitFontFamily,
-                                    fontWeight = FontWeight.Bold
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedButton(
+                                onClick = { triggerDeviceScan() },
+                                shape = RoundedCornerShape(20.dp)
+                            ) {
+                                Text("Scan Device", fontFamily = OutfitFontFamily)
+                            }
+
+                            Button(
+                                onClick = {
+                                    pdfPickerLauncher.launch(arrayOf("application/pdf"))
+                                },
+                                shape = RoundedCornerShape(20.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
                                 )
-                            )
+                            ) {
+                                Text(
+                                    text = "Choose PDF File",
+                                    style = MaterialTheme.typography.labelLarge.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                )
+                            }
                         }
                     }
                 }
@@ -255,11 +374,51 @@ fun DocumentsScreen(
                             doc = doc,
                             onClick = { onDocumentClick(doc) },
                             onToggleFavorite = { onToggleFavorite(doc.id) },
-                            onDelete = { onDeleteDocument(doc.id) }
+                            onDelete = { documentToDelete = doc }
                         )
                     }
                 }
             }
+        }
+
+        // Delete confirmation dialog explaining actual deletion from storage
+        documentToDelete?.let { doc ->
+            AlertDialog(
+                onDismissRequest = { documentToDelete = null },
+                title = {
+                    Text(
+                        text = "Delete PDF Document?",
+                        fontFamily = OutfitFontFamily,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Text(
+                        text = "Are you sure you want to delete \"${doc.displayName}\"? This will permanently delete the actual PDF file from your device.",
+                        fontFamily = OutfitFontFamily
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val id = doc.id
+                            documentToDelete = null
+                            onPermanentlyDeleteDocument(id)
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Document deleted from device storage")
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = NoteCoral)
+                    ) {
+                        Text("Delete from Device", color = Color.White, fontFamily = OutfitFontFamily)
+                    }
+                },
+                dismissButton = {
+                    OutlinedButton(onClick = { documentToDelete = null }) {
+                        Text("Cancel", fontFamily = OutfitFontFamily)
+                    }
+                }
+            )
         }
 
         SnackbarHost(
@@ -382,10 +541,10 @@ fun DocumentCardItem(
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Move to Trash", fontFamily = OutfitFontFamily, color = MaterialTheme.colorScheme.error) },
+                            text = { Text("Delete from Device", fontFamily = OutfitFontFamily, color = MaterialTheme.colorScheme.error) },
                             leadingIcon = {
                                 Icon(
-                                    imageVector = Icons.Outlined.DeleteOutline,
+                                    imageVector = Icons.Outlined.DeleteForever,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.error
                                 )

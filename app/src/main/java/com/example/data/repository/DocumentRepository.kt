@@ -1,13 +1,16 @@
 package com.example.data.repository
 
+import android.content.ContentUris
 import android.content.Context
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.Environment
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
 import android.provider.OpenableColumns
-import androidx.compose.ui.graphics.Color
-import com.example.data.local.dao.DocumentDao
+import android.util.Log
 import com.example.data.local.converters.DocumentMappers
+import com.example.data.local.dao.DocumentDao
 import com.example.data.local.entity.DocumentEntity
 import com.example.data.model.Document
 import kotlinx.coroutines.Dispatchers
@@ -15,10 +18,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
 import java.util.UUID
 
 class DocumentRepository(private val documentDao: DocumentDao) {
+
+    private val tag = "DocumentRepository"
 
     private val accentColors = listOf(
         0xFFFEEA9F, // NoteYellow
@@ -73,6 +77,152 @@ class DocumentRepository(private val documentDao: DocumentDao) {
         return documentDao.getAllDocumentsDirect().map { DocumentMappers.toDomain(it) }
     }
 
+    /**
+     * Scans the device in real-time for all PDF documents and indexes them directly
+     * without making separate copies or clones.
+     */
+    suspend fun scanDevicePdfDocuments(context: Context): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            var scannedCount = 0
+            val existingDocs = documentDao.getAllDocumentsDirect()
+            val existingPaths = existingDocs.map { it.localPath }.toSet()
+
+            // 1. Scan via MediaStore
+            val projection = arrayOf(
+                MediaStore.Files.FileColumns._ID,
+                MediaStore.Files.FileColumns.DISPLAY_NAME,
+                MediaStore.Files.FileColumns.SIZE,
+                MediaStore.Files.FileColumns.DATA,
+                MediaStore.Files.FileColumns.DATE_MODIFIED
+            )
+
+            val selection = "${MediaStore.Files.FileColumns.MIME_TYPE} = ? OR ${MediaStore.Files.FileColumns.DATA} LIKE '%.pdf'"
+            val selectionArgs = arrayOf("application/pdf")
+            val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
+
+            val queryUri = MediaStore.Files.getContentUri("external")
+            val cursor = context.contentResolver.query(queryUri, projection, selection, selectionArgs, sortOrder)
+
+            cursor?.use {
+                val idCol = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
+                val nameCol = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
+                val sizeCol = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
+                val dataCol = it.getColumnIndex(MediaStore.Files.FileColumns.DATA)
+                val dateCol = it.getColumnIndex(MediaStore.Files.FileColumns.DATE_MODIFIED)
+
+                while (it.moveToNext()) {
+                    val mediaId = it.getLong(idCol)
+                    val rawName = it.getString(nameCol) ?: "document_${mediaId}.pdf"
+                    val fileSize = it.getLong(sizeCol)
+                    val dataPath = if (dataCol != -1) it.getString(dataCol) else null
+                    val dateModified = if (dateCol != -1) it.getLong(dateCol) * 1000L else System.currentTimeMillis()
+
+                    val targetPath = if (!dataPath.isNullOrBlank() && File(dataPath).exists()) {
+                        dataPath
+                    } else {
+                        ContentUris.withAppendedId(queryUri, mediaId).toString()
+                    }
+
+                    if (!existingPaths.contains(targetPath)) {
+                        // Inspect page count safely without copying
+                        var pageCount = 1
+                        try {
+                            if (targetPath.startsWith("content://")) {
+                                context.contentResolver.openFileDescriptor(Uri.parse(targetPath), "r")?.use { pfd ->
+                                    PdfRenderer(pfd).use { r -> pageCount = r.pageCount }
+                                }
+                            } else {
+                                val file = File(targetPath)
+                                if (file.exists() && file.canRead()) {
+                                    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)?.use { pfd ->
+                                        PdfRenderer(pfd).use { r -> pageCount = r.pageCount }
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {
+                        }
+
+                        val accentColor = accentColors[(targetPath.hashCode() and 0x7FFFFFFF) % accentColors.size]
+                        val displayName = rawName.removeSuffix(".pdf").replace("_", " ")
+
+                        val docEntity = DocumentEntity(
+                            id = "pdf_${mediaId}_${UUID.randomUUID().toString().take(4)}",
+                            fileName = rawName,
+                            displayName = displayName,
+                            localPath = targetPath,
+                            fileSize = fileSize,
+                            mimeType = "application/pdf",
+                            pageCount = pageCount.coerceAtLeast(1),
+                            createdAt = dateModified,
+                            updatedAt = dateModified,
+                            lastOpenedAt = dateModified,
+                            lastOpenedPage = 0,
+                            isFavorite = false,
+                            isDeleted = false,
+                            syncStatus = "SYNCED",
+                            remoteStorageRef = null,
+                            accentColorHex = accentColor
+                        )
+                        documentDao.insertDocument(docEntity)
+                        scannedCount++
+                    }
+                }
+            }
+
+            // 2. Scan standard storage Download & Documents directories directly
+            val publicDirs = listOf(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+            )
+
+            for (dir in publicDirs) {
+                if (dir != null && dir.exists() && dir.isDirectory) {
+                    val pdfFiles = dir.listFiles { file -> file.isFile && file.name.endsWith(".pdf", ignoreCase = true) }
+                    pdfFiles?.forEach { file ->
+                        val path = file.absolutePath
+                        if (!existingPaths.contains(path)) {
+                            var pageCount = 1
+                            try {
+                                ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)?.use { pfd ->
+                                    PdfRenderer(pfd).use { r -> pageCount = r.pageCount }
+                                }
+                            } catch (_: Exception) {}
+
+                            val accentColor = accentColors[(path.hashCode() and 0x7FFFFFFF) % accentColors.size]
+                            val displayName = file.name.removeSuffix(".pdf").replace("_", " ")
+
+                            val docEntity = DocumentEntity(
+                                id = "pdf_file_${UUID.randomUUID().toString().take(8)}",
+                                fileName = file.name,
+                                displayName = displayName,
+                                localPath = path,
+                                fileSize = file.length(),
+                                mimeType = "application/pdf",
+                                pageCount = pageCount.coerceAtLeast(1),
+                                createdAt = file.lastModified(),
+                                updatedAt = file.lastModified(),
+                                lastOpenedAt = file.lastModified(),
+                                lastOpenedPage = 0,
+                                isFavorite = false,
+                                isDeleted = false,
+                                syncStatus = "SYNCED",
+                                remoteStorageRef = null,
+                                accentColorHex = accentColor
+                            )
+                            documentDao.insertDocument(docEntity)
+                            scannedCount++
+                        }
+                    }
+                }
+            }
+
+            Result.success(scannedCount)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to scan device PDFs", e)
+            Result.failure(e)
+        }
+    }
+
     suspend fun importPdf(uri: Uri, context: Context): Result<Document> = withContext(Dispatchers.IO) {
         try {
             var fileName = "document_${System.currentTimeMillis()}.pdf"
@@ -91,40 +241,28 @@ class DocumentRepository(private val documentDao: DocumentDao) {
                 }
             }
 
-            val sanitizedFileName = fileName.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
-            val docsDir = File(context.filesDir, "documents").apply { mkdirs() }
             val docId = "doc_${UUID.randomUUID().toString().take(8)}"
-            val destinationFile = File(docsDir, "${docId}_$sanitizedFileName")
+            val path = uri.toString()
 
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(destinationFile).use { output ->
-                    input.copyTo(output)
-                }
-            } ?: return@withContext Result.failure(Exception("Unable to read selected PDF file"))
-
-            val actualSize = if (destinationFile.exists()) destinationFile.length() else fileSize
-
-            // Inspect page count via PdfRenderer safely
             var pageCount = 1
             try {
-                ParcelFileDescriptor.open(destinationFile, ParcelFileDescriptor.MODE_READ_ONLY)?.use { pfd ->
+                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
                     PdfRenderer(pfd).use { renderer ->
                         pageCount = renderer.pageCount
                     }
                 }
             } catch (_: Exception) {
-                // Keep default 1 if password protected or rendering probe fails
             }
 
-            val accentColor = accentColors[(destinationFile.name.hashCode() and 0x7FFFFFFF) % accentColors.size]
+            val accentColor = accentColors[(path.hashCode() and 0x7FFFFFFF) % accentColors.size]
             val displayName = fileName.removeSuffix(".pdf").replace("_", " ")
 
             val entity = DocumentEntity(
                 id = docId,
                 fileName = fileName,
                 displayName = displayName,
-                localPath = destinationFile.absolutePath,
-                fileSize = actualSize,
+                localPath = path,
+                fileSize = fileSize,
                 mimeType = "application/pdf",
                 pageCount = pageCount,
                 createdAt = System.currentTimeMillis(),
@@ -133,7 +271,7 @@ class DocumentRepository(private val documentDao: DocumentDao) {
                 lastOpenedPage = 0,
                 isFavorite = false,
                 isDeleted = false,
-                syncStatus = "PENDING",
+                syncStatus = "SYNCED",
                 remoteStorageRef = null,
                 accentColorHex = accentColor
             )
@@ -166,12 +304,24 @@ class DocumentRepository(private val documentDao: DocumentDao) {
         documentDao.restoreDocument(id, System.currentTimeMillis())
     }
 
-    suspend fun permanentlyDeleteDocument(id: String) = withContext(Dispatchers.IO) {
+    /**
+     * Permanently deletes document from database AND actually deletes the physical file
+     * from the device storage.
+     */
+    suspend fun permanentlyDeleteDocument(id: String, context: Context? = null) = withContext(Dispatchers.IO) {
         val doc = documentDao.getDocumentByIdDirect(id)
         if (doc != null) {
-            val file = File(doc.localPath)
-            if (file.exists()) {
-                file.delete()
+            try {
+                if (doc.localPath.startsWith("content://") && context != null) {
+                    context.contentResolver.delete(Uri.parse(doc.localPath), null, null)
+                } else {
+                    val file = File(doc.localPath)
+                    if (file.exists()) {
+                        file.delete()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "Could not delete physical file for ${doc.localPath}: ${e.message}")
             }
             documentDao.permanentlyDeleteDocument(id)
         }

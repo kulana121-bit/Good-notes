@@ -35,6 +35,11 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import com.example.util.AudioPlayerManager
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -46,6 +51,8 @@ class NotesViewModel(
     private val authService: FirebaseAuthService = FirebaseAuthService(application),
     private val syncManager: SyncManager = SyncManager(application, NotesDatabase.getInstance(application), authService)
 ) : AndroidViewModel(application) {
+
+    val audioPlayer: AudioPlayerManager = AudioPlayerManager(application)
 
     init {
         viewModelScope.launch {
@@ -392,10 +399,41 @@ class NotesViewModel(
         }
     }
 
+    fun scanDeviceDocuments(onResult: (Int) -> Unit = {}) {
+        viewModelScope.launch {
+            val result = documentRepository.scanDevicePdfDocuments(getApplication())
+            onResult(result.getOrDefault(0))
+        }
+    }
+
+    fun createVoiceNote(audioFile: File, durationMs: Long, customTitle: String? = null) {
+        val timeLabel = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date())
+        val title = customTitle ?: "Voice Note $timeLabel"
+        val durationSec = (durationMs / 1000).coerceAtLeast(1)
+        val note = Note(
+            id = "note_${UUID.randomUUID().toString().take(8)}",
+            title = title,
+            body = "Voice recording ($durationSec sec)",
+            cardType = VisualCardType.LAVENDER_NOTE,
+            folder = "Personal",
+            updatedAtText = "Just now",
+            audioUri = audioFile.absolutePath,
+            audioDurationMs = durationMs,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+        saveNote(note)
+    }
+
     fun permanentlyDeleteDocument(docId: String) {
         viewModelScope.launch {
-            documentRepository.permanentlyDeleteDocument(docId)
+            documentRepository.permanentlyDeleteDocument(docId, getApplication())
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        audioPlayer.release()
     }
 
     // Backup & Restore

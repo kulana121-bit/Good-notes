@@ -1,5 +1,8 @@
 package com.example.data.model
 
+import com.squareup.moshi.JsonClass
+
+@JsonClass(generateAdapter = true)
 data class Note(
     val id: String,
     val title: String,
@@ -16,5 +19,8 @@ data class Note(
     val tags: List<String> = emptyList(),
     val isDeleted: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val imageUri: String? = null,
+    val audioUri: String? = null,
+    val audioDurationMs: Long = 0L
 )

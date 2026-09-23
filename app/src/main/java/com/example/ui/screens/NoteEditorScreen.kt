@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
@@ -36,24 +41,37 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.FormatAlignLeft
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Checklist
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.ContentCut
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.IosShare
-import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -67,6 +85,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
@@ -74,16 +94,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.model.ChecklistItem
 import com.example.data.model.Note
 import com.example.ui.theme.MotionTokens
+import com.example.ui.theme.NoteCoral
+import com.example.ui.theme.NoteLavender
 import com.example.ui.theme.NoteWarmCream
 import com.example.ui.theme.NoteYellow
 import com.example.ui.theme.OutfitFontFamily
 import com.example.ui.theme.performTap
 import com.example.ui.theme.rememberReducedMotion
 import com.example.ui.viewmodel.SaveStatus
+import com.example.util.AudioPlayerManager
+import com.example.util.AudioRecorderManager
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.UUID
 
 @Composable
@@ -97,28 +127,104 @@ fun NoteEditorScreen(
     onDeleteNote: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var title by remember(note.id) { mutableStateOf(note.title) }
     var body by remember(note.id) { mutableStateOf(note.body) }
     var checklist by remember(note.id) { mutableStateOf(note.checklist) }
+    var attachedImageUri by remember(note.id) { mutableStateOf(note.imageUri) }
+    var attachedAudioUri by remember(note.id) { mutableStateOf(note.audioUri) }
+    var attachedAudioDurationMs by remember(note.id) { mutableStateOf(note.audioDurationMs) }
+
     var newChecklistInput by remember { mutableStateOf("") }
     var showNewChecklistField by remember { mutableStateOf(false) }
 
-    // Text formatting / selection demonstration state
+    // Text formatting / selection state
     var isTextSelectionActive by remember { mutableStateOf(false) }
     var selectedFontSize by remember { mutableStateOf(16) }
-    var isDoodleActive by remember { mutableStateOf(true) }
+    var isDoodleActive by remember { mutableStateOf(false) }
+
+    // Audio Player & Recorder
+    val audioPlayer = remember { AudioPlayerManager(context) }
+    val isPlaying by audioPlayer.isPlaying.collectAsState()
+    val playPositionMs by audioPlayer.currentPositionMs.collectAsState()
+    val audioDurationMs by audioPlayer.durationMs.collectAsState()
+
+    val audioRecorder = remember { AudioRecorderManager() }
+    var isRecordingActive by remember { mutableStateOf(false) }
+    var recordingDurationSec by remember { mutableIntStateOf(0) }
+    var isRecordingModalOpen by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    fun persist(t: String = title, b: String = body, c: List<ChecklistItem> = checklist) {
+    fun persist(
+        t: String = title,
+        b: String = body,
+        c: List<ChecklistItem> = checklist,
+        img: String? = attachedImageUri,
+        aud: String? = attachedAudioUri,
+        audDur: Long = attachedAudioDurationMs
+    ) {
         val updated = note.copy(
             title = if (t.isBlank()) "Untitled Note" else t,
             body = b,
             checklist = c,
+            imageUri = img,
+            audioUri = aud,
+            audioDurationMs = audDur,
             updatedAtText = "Just now"
         )
         onContentChange?.invoke(updated) ?: onSave(updated)
+    }
+
+    // Photo picker launcher
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            val uriStr = uri.toString()
+            attachedImageUri = uriStr
+            persist(img = uriStr)
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("Image attached to note")
+            }
+        }
+    }
+
+    // Mic permission launcher
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            isRecordingModalOpen = true
+            val res = audioRecorder.startRecording(context)
+            if (res.isSuccess) {
+                isRecordingActive = true
+            }
+        } else {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("Microphone permission required")
+            }
+        }
+    }
+
+    LaunchedEffect(isRecordingActive) {
+        if (isRecordingActive) {
+            recordingDurationSec = 0
+            while (isActive && isRecordingActive) {
+                delay(1000)
+                recordingDurationSec++
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            audioPlayer.release()
+            if (isRecordingActive) {
+                audioRecorder.cancelRecording()
+            }
+        }
     }
 
     Box(
@@ -131,7 +237,7 @@ fun NoteEditorScreen(
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
-            // Top App Bar: Back, Save Status, "Shared to" avatars, Delete, Share, Favorite
+            // Top App Bar
             EditorTopBar(
                 isFavorite = note.isFavorite,
                 saveStatus = saveStatus,
@@ -145,7 +251,7 @@ fun NoteEditorScreen(
                 },
                 onShare = {
                     coroutineScope.launch {
-                        snackbarHostState.showSnackbar("Sharing note link copied to clipboard")
+                        snackbarHostState.showSnackbar("Note content ready to share")
                     }
                 },
                 onToggleFavorite = {
@@ -159,7 +265,7 @@ fun NoteEditorScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 28.dp, vertical = 8.dp)
+                    .padding(horizontal = 24.dp, vertical = 8.dp)
             ) {
                 // Large expressive Title Field
                 BasicTextField(
@@ -170,7 +276,7 @@ fun NoteEditorScreen(
                     },
                     textStyle = TextStyle(
                         fontFamily = OutfitFontFamily,
-                        fontSize = 32.sp,
+                        fontSize = 30.sp,
                         lineHeight = 36.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF141414)
@@ -183,7 +289,7 @@ fun NoteEditorScreen(
                                     text = "Note Title...",
                                     style = TextStyle(
                                         fontFamily = OutfitFontFamily,
-                                        fontSize = 32.sp,
+                                        fontSize = 30.sp,
                                         lineHeight = 36.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0x55141414)
@@ -198,30 +304,145 @@ fun NoteEditorScreen(
                         .testTag("note_title_input")
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                // Interactive Text Highlight Box (matches screenshot 4: "Design Sprint is a way...")
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isTextSelectionActive) NoteYellow else Color.Transparent)
-                        .clickable { isTextSelectionActive = !isTextSelectionActive }
-                        .padding(if (isTextSelectionActive) 8.dp else 0.dp)
-                ) {
-                    Text(
-                        text = if (body.isNotEmpty()) body.take(150) else "Design Sprint is a way to quickly ideate, prototype, and validate a product idea in a week instead of waiting for months to launch a full-fledged product.",
-                        style = TextStyle(
-                            fontFamily = OutfitFontFamily,
-                            fontSize = selectedFontSize.sp,
-                            lineHeight = (selectedFontSize + 7).sp,
-                            color = Color(0xFF141414),
-                            fontWeight = FontWeight.Normal
+                // Attached Image Section
+                if (!attachedImageUri.isNullOrBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                    ) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(attachedImageUri)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = "Attached photo",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
                         )
-                    )
+
+                        IconButton(
+                            onClick = {
+                                attachedImageUri = null
+                                persist(img = null)
+                            },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(8.dp)
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(Color(0x99000000))
+                        ) {
+                            Icon(
+                                Icons.Outlined.Close,
+                                contentDescription = "Remove photo",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                // Attached Audio / Voice Note Playback Section
+                if (!attachedAudioUri.isNullOrBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(NoteLavender.copy(alpha = 0.25f))
+                            .padding(14.dp)
+                    ) {
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            attachedAudioUri?.let { uri ->
+                                                audioPlayer.playOrToggle(uri)
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(CircleShape)
+                                            .background(NoteLavender)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                            contentDescription = "Play/Pause audio",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+
+                                    Column {
+                                        Text(
+                                            text = "Voice Recording",
+                                            style = TextStyle(
+                                                fontFamily = OutfitFontFamily,
+                                                fontSize = 15.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF141414)
+                                            )
+                                        )
+                                        val totalMs = if (audioDurationMs > 0) audioDurationMs.toLong() else attachedAudioDurationMs
+                                        val durSec = (totalMs / 1000L).coerceAtLeast(1L)
+                                        val curSec = (playPositionMs.toLong() / 1000L).coerceAtLeast(0L)
+                                        Text(
+                                            text = "$curSec s / $durSec s",
+                                            style = TextStyle(
+                                                fontFamily = OutfitFontFamily,
+                                                fontSize = 12.sp,
+                                                color = Color(0x99141414)
+                                            )
+                                        )
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        audioPlayer.stop()
+                                        attachedAudioUri = null
+                                        attachedAudioDurationMs = 0L
+                                        persist(aud = null, audDur = 0L)
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.DeleteOutline,
+                                        contentDescription = "Delete voice memo",
+                                        tint = Color(0xFF141414)
+                                    )
+                                }
+                            }
+
+                            if (isPlaying || playPositionMs > 0) {
+                                val totalDur = if (audioDurationMs > 0) audioDurationMs.toFloat() else attachedAudioDurationMs.toFloat().coerceAtLeast(1000f)
+                                Slider(
+                                    value = playPositionMs.toFloat().coerceIn(0f, totalDur),
+                                    onValueChange = { audioPlayer.seekTo(it.toInt()) },
+                                    valueRange = 0f..totalDur,
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = NoteLavender,
+                                        activeTrackColor = NoteLavender
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
 
                 // Editable Body Text Field
                 BasicTextField(
@@ -241,7 +462,7 @@ fun NoteEditorScreen(
                         Box {
                             if (body.isEmpty()) {
                                 Text(
-                                    text = "Tap here to continue writing on digital paper...",
+                                    text = "Start typing on digital paper...",
                                     style = TextStyle(
                                         fontFamily = OutfitFontFamily,
                                         fontSize = 15.sp,
@@ -257,12 +478,12 @@ fun NoteEditorScreen(
                         .testTag("note_body_input")
                 )
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                // Hand-Drawn Phase Diagram Section (matching reference screenshot 2 & 3)
+                // Optional Doodle Canvas Section
                 if (isDoodleActive) {
                     Text(
-                        text = "Design Sprint Phases:",
+                        text = "Hand-Drawn Sketches:",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontFamily = OutfitFontFamily,
                             fontWeight = FontWeight.Bold,
@@ -270,32 +491,29 @@ fun NoteEditorScreen(
                         )
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        // Hand-drawn rounded pill "Empathize"
                         Box(
                             modifier = Modifier
                                 .border(1.5.dp, Color(0xFF2C2C2C), RoundedCornerShape(24.dp))
                                 .padding(horizontal = 18.dp, vertical = 8.dp)
                         ) {
                             Text(
-                                text = "Empathize",
+                                text = "Idea Diagram",
                                 style = TextStyle(
                                     fontFamily = OutfitFontFamily,
-                                    fontSize = 15.sp,
+                                    fontSize = 14.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = Color(0xFF141414)
                                 )
                             )
                         }
 
-                        // Tactile doodle heart & curved arrow Canvas
                         Canvas(modifier = Modifier.size(54.dp, 36.dp)) {
-                            // Little hand-drawn heart
                             val heartPath = Path().apply {
                                 moveTo(size.width * 0.25f, size.height * 0.4f)
                                 cubicTo(size.width * 0.1f, size.height * 0.1f, size.width * 0.4f, size.height * 0.1f, size.width * 0.5f, size.height * 0.4f)
@@ -310,9 +528,8 @@ fun NoteEditorScreen(
                             )
                         }
                     }
+                    Spacer(modifier = Modifier.height(20.dp))
                 }
-
-                Spacer(modifier = Modifier.height(20.dp))
 
                 // Checklist Section
                 if (checklist.isNotEmpty() || showNewChecklistField) {
@@ -353,7 +570,7 @@ fun NoteEditorScreen(
                                             imageVector = Icons.Outlined.Check,
                                             contentDescription = null,
                                             tint = Color.White,
-                                            modifier = Modifier.size(14.dp)
+                                            modifier = Modifier.size(13.dp)
                                         )
                                     }
                                 }
@@ -365,10 +582,27 @@ fun NoteEditorScreen(
                                     style = TextStyle(
                                         fontFamily = OutfitFontFamily,
                                         fontSize = 15.sp,
-                                        textDecoration = if (item.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
-                                        color = if (item.isCompleted) Color(0x88141414) else Color(0xFF141414)
-                                    )
+                                        fontWeight = FontWeight.Normal,
+                                        color = if (item.isCompleted) Color(0x66141414) else Color(0xFF141414),
+                                        textDecoration = if (item.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                                    ),
+                                    modifier = Modifier.weight(1f)
                                 )
+
+                                IconButton(
+                                    onClick = {
+                                        checklist = checklist.filter { it.id != item.id }
+                                        persist()
+                                    },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Close,
+                                        contentDescription = "Delete item",
+                                        tint = Color(0x88141414),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -386,18 +620,18 @@ fun NoteEditorScreen(
                                         color = Color(0xFF141414)
                                     ),
                                     cursorBrush = SolidColor(Color(0xFF141414)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .background(Color(0x11000000), RoundedCornerShape(8.dp))
+                                        .padding(8.dp),
                                     decorationBox = { inner ->
-                                        Box(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .background(Color(0x11000000), RoundedCornerShape(8.dp))
-                                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                                        ) {
-                                            if (newChecklistInput.isEmpty()) {
-                                                Text("Add new task...", color = Color(0x66141414))
-                                            }
-                                            inner()
+                                        if (newChecklistInput.isEmpty()) {
+                                            Text(
+                                                "New checklist item...",
+                                                style = TextStyle(fontFamily = OutfitFontFamily, color = Color(0x66141414))
+                                            )
                                         }
+                                        inner()
                                     }
                                 )
 
@@ -431,28 +665,6 @@ fun NoteEditorScreen(
             }
         }
 
-        // Floating Context Selection Bar (Cut, Copy, Share) inspired by screenshot 4
-        AnimatedVisibility(
-            visible = isTextSelectionActive,
-            enter = fadeIn() + slideInVertically { it / 2 },
-            exit = fadeOut() + slideOutVertically { it / 2 },
-            modifier = Modifier
-                .align(Alignment.Center)
-                .padding(bottom = 120.dp)
-        ) {
-            FloatingSelectionToolbar(
-                onCut = {
-                    coroutineScope.launch { snackbarHostState.showSnackbar("Text cut to clipboard") }
-                },
-                onCopy = {
-                    coroutineScope.launch { snackbarHostState.showSnackbar("Text copied") }
-                },
-                onShare = {
-                    coroutineScope.launch { snackbarHostState.showSnackbar("Sharing selection") }
-                }
-            )
-        }
-
         // Bottom Editor Accessories (Toolbars)
         Column(
             modifier = Modifier
@@ -463,7 +675,7 @@ fun NoteEditorScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Text Formatting Keyboard Bar (inspired by screenshot 4)
+            // Text Formatting Keyboard Bar
             AnimatedVisibility(
                 visible = isTextSelectionActive,
                 enter = fadeIn() + slideInVertically { it },
@@ -475,27 +687,144 @@ fun NoteEditorScreen(
                 )
             }
 
-            // Primary Floating Editor Toolbar (inspired by screenshots 2 & 3: +, Camera, Pen, Checklist)
+            // Primary Floating Editor Toolbar (+, Camera, Pen, Checklist, Mic)
             FloatingEditorToolbar(
                 onAddContent = {
                     showNewChecklistField = true
                 },
                 onCamera = {
-                    coroutineScope.launch { snackbarHostState.showSnackbar("Image scanner ready") }
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
                 },
                 onDraw = {
                     isDoodleActive = !isDoodleActive
                     coroutineScope.launch {
-                        snackbarHostState.showSnackbar(if (isDoodleActive) "Doodle layer visible" else "Doodle layer hidden")
+                        snackbarHostState.showSnackbar(if (isDoodleActive) "Sketch layer enabled" else "Sketch layer hidden")
                     }
                 },
                 onChecklist = {
                     showNewChecklistField = true
                 },
+                onMic = {
+                    val hasPerm = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (hasPerm) {
+                        isRecordingModalOpen = true
+                        val res = audioRecorder.startRecording(context)
+                        if (res.isSuccess) {
+                            isRecordingActive = true
+                        }
+                    } else {
+                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                },
                 onFormat = {
                     isTextSelectionActive = !isTextSelectionActive
                 }
             )
+        }
+
+        // Voice Recording Modal inside Note Editor
+        AnimatedVisibility(
+            visible = isRecordingModalOpen,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it },
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .shadow(16.dp, RoundedCornerShape(32.dp))
+                    .clip(RoundedCornerShape(32.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(24.dp)
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = if (isRecordingActive) "Recording Voice Note..." else "Recording Finished",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontFamily = OutfitFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(CircleShape)
+                            .background(NoteCoral),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isRecordingActive) Icons.Filled.GraphicEq else Icons.Filled.Mic,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+
+                    val mins = recordingDurationSec / 60
+                    val secs = recordingDurationSec % 60
+                    Text(
+                        text = String.format("%02d:%02d", mins, secs),
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontFamily = OutfitFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    )
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (isRecordingActive) {
+                            Button(
+                                onClick = {
+                                    val dur = audioRecorder.stopRecording()
+                                    isRecordingActive = false
+                                    // Attach audio to note
+                                    val audioDir = File(context.filesDir, "voice_notes")
+                                    val latestFile = audioDir.listFiles()?.maxByOrNull { it.lastModified() }
+                                    if (latestFile != null) {
+                                        attachedAudioUri = latestFile.absolutePath
+                                        attachedAudioDurationMs = dur
+                                        persist(aud = latestFile.absolutePath, audDur = dur)
+                                    }
+                                    isRecordingModalOpen = false
+                                },
+                                shape = RoundedCornerShape(20.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = NoteCoral),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Filled.Stop, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Stop & Attach", fontFamily = OutfitFontFamily, fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = {
+                                    audioRecorder.cancelRecording()
+                                    isRecordingModalOpen = false
+                                },
+                                shape = RoundedCornerShape(20.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Discard", fontFamily = OutfitFontFamily)
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         SnackbarHost(
@@ -578,53 +907,12 @@ private fun EditorTopBar(
             )
         }
 
-        // "Shared to" + Avatars + Delete Button + Share Button + Favorite
+        // Action Buttons: Delete (Move to Trash), Share, Favorite
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (sharedWith.isNotEmpty()) {
-                Text(
-                    text = "Shared to",
-                    style = TextStyle(
-                        fontFamily = OutfitFontFamily,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xAA141414)
-                    )
-                )
-
-                // Overlapping avatar cluster (matching screenshot 2 & 3)
-                Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
-                    sharedWith.take(3).forEachIndexed { index, name ->
-                        val avatarColor = when (index % 3) {
-                            0 -> Color(0xFF4A3E3D)
-                            1 -> Color(0xFFD4A373)
-                            else -> Color(0xFF2A6F97)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .border(1.5.dp, NoteWarmCream, CircleShape)
-                                .background(avatarColor),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = name.take(1),
-                                style = TextStyle(
-                                    fontFamily = OutfitFontFamily,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Move to Trash (Soft Delete) icon in round button
+            // Delete / Move to Trash button
             val deleteInteraction = remember { MutableInteractionSource() }
             val isDeletePressed by deleteInteraction.collectIsPressedAsState()
             val deleteScale by animateFloatAsState(
@@ -652,35 +940,22 @@ private fun EditorTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Delete,
-                    contentDescription = "Delete note",
+                    contentDescription = "Move to Trash",
                     tint = Color(0xFF141414),
                     modifier = Modifier.size(18.dp)
                 )
             }
 
-            // Share icon in round button
-            val shareInteraction = remember { MutableInteractionSource() }
-            val isSharePressed by shareInteraction.collectIsPressedAsState()
-            val shareScale by animateFloatAsState(
-                targetValue = if (isSharePressed && !isReducedMotion) 0.88f else 1.0f,
-                animationSpec = MotionTokens.subtlePressSpring(),
-                label = "share_btn_scale"
-            )
-
+            // Share icon
             Box(
                 modifier = Modifier
-                    .scale(shareScale)
                     .size(38.dp)
                     .clip(CircleShape)
                     .background(Color(0x18000000))
-                    .clickable(
-                        interactionSource = shareInteraction,
-                        indication = null,
-                        onClick = {
-                            haptics.performTap()
-                            onShare()
-                        }
-                    ),
+                    .clickable(onClick = {
+                        haptics.performTap()
+                        onShare()
+                    }),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -692,28 +967,15 @@ private fun EditorTopBar(
             }
 
             // Favorite toggle
-            val favInteraction = remember { MutableInteractionSource() }
-            val isFavPressed by favInteraction.collectIsPressedAsState()
-            val favScale by animateFloatAsState(
-                targetValue = if (isFavPressed && !isReducedMotion) 0.85f else if (isFavorite && !isReducedMotion) 1.05f else 1.0f,
-                animationSpec = MotionTokens.bouncySpring(),
-                label = "fav_btn_scale"
-            )
-
             Box(
                 modifier = Modifier
-                    .scale(favScale)
                     .size(38.dp)
                     .clip(CircleShape)
                     .background(Color(0x18000000))
-                    .clickable(
-                        interactionSource = favInteraction,
-                        indication = null,
-                        onClick = {
-                            haptics.performTap()
-                            onToggleFavorite()
-                        }
-                    )
+                    .clickable(onClick = {
+                        haptics.performTap()
+                        onToggleFavorite()
+                    })
                     .testTag("editor_favorite_button"),
                 contentAlignment = Alignment.Center
             ) {
@@ -728,13 +990,14 @@ private fun EditorTopBar(
     }
 }
 
-// Floating Primary Editor Toolbar (screenshot 2 & 3: (+), Camera, Draw, Checklist)
+// Floating Primary Editor Toolbar
 @Composable
 private fun FloatingEditorToolbar(
     onAddContent: () -> Unit,
     onCamera: () -> Unit,
     onDraw: () -> Unit,
     onChecklist: () -> Unit,
+    onMic: () -> Unit,
     onFormat: () -> Unit
 ) {
     val haptics = LocalHapticFeedback.current
@@ -760,7 +1023,7 @@ private fun FloatingEditorToolbar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // (+) Dominant dark circular button
+        // (+) Add Checklist item
         Box(
             modifier = Modifier
                 .scale(addScale)
@@ -785,11 +1048,18 @@ private fun FloatingEditorToolbar(
             )
         }
 
-        // Camera / Image
+        // Camera / Image Attachment
         EditorToolIcon(
             icon = Icons.Outlined.Image,
-            contentDescription = "Image",
+            contentDescription = "Attach Photo",
             onClick = onCamera
+        )
+
+        // Mic / Voice Note Recording
+        EditorToolIcon(
+            icon = Icons.Filled.Mic,
+            contentDescription = "Record Voice Note",
+            onClick = onMic
         )
 
         // Pen / Drawing
@@ -855,53 +1125,7 @@ private fun EditorToolIcon(
     }
 }
 
-// Contextual Cut, Copy, Share floating toolbar (screenshot 4)
-@Composable
-private fun FloatingSelectionToolbar(
-    onCut: () -> Unit,
-    onCopy: () -> Unit,
-    onShare: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .shadow(12.dp, RoundedCornerShape(20.dp))
-            .clip(RoundedCornerShape(20.dp))
-            .background(Color(0xCCEFE2BD))
-            .border(1.dp, Color(0x33000000), RoundedCornerShape(20.dp))
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        IconButton(onClick = onCut, modifier = Modifier.size(32.dp)) {
-            Icon(
-                imageVector = Icons.Outlined.ContentCut,
-                contentDescription = "Cut",
-                tint = Color(0xFF141414),
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        IconButton(onClick = onCopy, modifier = Modifier.size(32.dp)) {
-            Icon(
-                imageVector = Icons.Outlined.ContentCopy,
-                contentDescription = "Copy",
-                tint = Color(0xFF141414),
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        IconButton(onClick = onShare, modifier = Modifier.size(32.dp)) {
-            Icon(
-                imageVector = Icons.Outlined.Share,
-                contentDescription = "Share",
-                tint = Color(0xFF141414),
-                modifier = Modifier.size(18.dp)
-            )
-        }
-    }
-}
-
-// Dark Keyboard / Formatting Accessory Bar (screenshot 4)
+// Dark Keyboard / Formatting Accessory Bar
 @Composable
 private fun DarkFormattingAccessoryBar(
     selectedSize: Int,
@@ -926,7 +1150,6 @@ private fun DarkFormattingAccessoryBar(
             )
         )
 
-        // Circle style badge
         Box(
             modifier = Modifier
                 .size(18.dp)
@@ -940,7 +1163,7 @@ private fun DarkFormattingAccessoryBar(
             modifier = Modifier.size(18.dp)
         )
 
-        // Font Sizes: 14, 16, 18 (16 highlighted in yellow)
+        // Font Sizes: 14, 16, 18
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             listOf(14, 16, 18).forEach { size ->
                 val isCurrent = size == selectedSize

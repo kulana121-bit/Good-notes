@@ -105,21 +105,32 @@ fun PdfReaderScreen(
         onPageChanged(currentPageIndex)
     }
 
-    // Open native PdfRenderer safely
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    // Open native PdfRenderer safely for either File path or content:// Uri
     DisposableEffect(document.localPath) {
-        val file = File(document.localPath)
-        if (!file.exists() || !file.canRead()) {
-            errorMessage = "Document file not found on local storage"
-        } else {
-            try {
-                val openedPfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        try {
+            val openedPfd: ParcelFileDescriptor? = if (document.localPath.startsWith("content://")) {
+                context.contentResolver.openFileDescriptor(android.net.Uri.parse(document.localPath), "r")
+            } else {
+                val file = File(document.localPath)
+                if (file.exists() && file.canRead()) {
+                    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                } else {
+                    null
+                }
+            }
+
+            if (openedPfd == null) {
+                errorMessage = "Document file not accessible"
+            } else {
                 val openedRenderer = PdfRenderer(openedPfd)
                 pfd = openedPfd
                 renderer = openedRenderer
                 totalPages = openedRenderer.pageCount
-            } catch (e: Exception) {
-                errorMessage = "Unable to open PDF: ${e.localizedMessage ?: "Corrupted file"}"
             }
+        } catch (e: Exception) {
+            errorMessage = "Unable to open PDF: ${e.localizedMessage ?: "Corrupted file"}"
         }
 
         onDispose {

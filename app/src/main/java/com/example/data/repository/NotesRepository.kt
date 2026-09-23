@@ -186,23 +186,20 @@ class NotesRepository(private val database: NotesDatabase) {
     }
 
     /**
-     * Seeds initial demo notes and folders ONLY once on first app launch / initial database creation.
-     * Room becomes the single source of truth thereafter.
+     * Seeds initial folders if needed and ensures all dummy notes are cleared.
      */
     suspend fun seedInitialDataIfNeeded() {
-        val isInitialized = settingDao.getSettingDirect("database_initialized")
-        if (isInitialized != "true") {
-            val count = noteDao.getTotalNotesCountDirect()
-            if (count == 0) {
-                val entities = InitialNotes.map { NoteMappers.toEntity(it) }
-                noteDao.insertNotes(entities)
-            }
-            val folderCount = folderDao.getFolderCountDirect()
-            if (folderCount == 0) {
-                val folderEntities = SampleFolders.map { NoteMappers.toFolderEntity(it) }
-                folderDao.insertFolders(folderEntities)
-            }
-            settingDao.setSetting(SettingEntity("database_initialized", "true"))
+        // Purge dummy notes if present
+        val dummyIds = listOf("note_1", "note_2", "note_3", "note_4", "note_5", "note_6", "note_7", "note_8")
+        dummyIds.forEach { dummyId ->
+            noteDao.permanentlyDeleteNote(dummyId)
         }
+
+        val folderCount = folderDao.getFolderCountDirect()
+        if (folderCount == 0) {
+            val folderEntities = SampleFolders.map { NoteMappers.toFolderEntity(it) }
+            folderDao.insertFolders(folderEntities)
+        }
+        settingDao.setSetting(SettingEntity("database_initialized", "true"))
     }
 }

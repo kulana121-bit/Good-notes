@@ -4,8 +4,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,27 +24,31 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.GraphicEq
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -54,6 +56,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.model.ChecklistItem
 import com.example.data.model.Note
 import com.example.data.model.VisualCardType
@@ -69,10 +73,11 @@ fun NoteCard(
     onClick: () -> Unit,
     onToggleFavorite: (String) -> Unit,
     onToggleChecklistItem: ((String, String) -> Unit)? = null,
+    onDeleteNote: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val isReducedMotion = rememberReducedMotion()
-    val shape = RoundedCornerShape(28.dp)
+    val shape = RoundedCornerShape(24.dp)
     val cardInteraction = remember { MutableInteractionSource() }
     val isPressed by cardInteraction.collectIsPressedAsState()
 
@@ -83,10 +88,19 @@ fun NoteCard(
     )
 
     val elevation by animateDpAsState(
-        targetValue = if (isPressed && !isReducedMotion) 2.dp else 6.dp,
+        targetValue = if (isPressed && !isReducedMotion) 2.dp else 4.dp,
         animationSpec = MotionTokens.subtlePressSpring(),
         label = "note_card_elevation"
     )
+
+    val (cardBgColor, contentColor) = when (note.cardType) {
+        VisualCardType.CORAL_TASK -> Color(0xFFEB7A53) to Color(0xFF1E1E1E)
+        VisualCardType.YELLOW_MEDIA -> Color(0xFFFEEA9F) to Color(0xFF1E1E1E)
+        VisualCardType.CREAM_LECTURE -> Color(0xFFFBF7EE) to Color(0xFF1E1E1E)
+        VisualCardType.LAVENDER_NOTE -> Color(0xFF9887DB) to Color(0xFF1E1E1E)
+        VisualCardType.GREEN_NOTE -> Color(0xFFA8D672) to Color(0xFF1E1E1E)
+        VisualCardType.BLUE_NOTE -> Color(0xFF7CC4FA) to Color(0xFF1E1E1E)
+    }
 
     Box(
         modifier = modifier
@@ -94,11 +108,11 @@ fun NoteCard(
             .shadow(
                 elevation = elevation,
                 shape = shape,
-                ambientColor = Color(0x33000000),
-                spotColor = Color(0x33000000)
+                ambientColor = Color(0x22000000),
+                spotColor = Color(0x22000000)
             )
             .clip(shape)
-            .background(note.cardType.backgroundColor)
+            .background(cardBgColor)
             .clickable(
                 interactionSource = cardInteraction,
                 indication = null,
@@ -106,83 +120,167 @@ fun NoteCard(
             )
             .testTag("note_card_${note.id}")
     ) {
-        when (note.cardType) {
-            VisualCardType.CORAL_TASK -> {
-                CoralTaskCardContent(
-                    note = note,
-                    onToggleFavorite = { onToggleFavorite(note.id) },
-                    onToggleChecklistItem = onToggleChecklistItem
-                )
-            }
-            VisualCardType.YELLOW_MEDIA -> {
-                YellowMediaCardContent(
-                    note = note,
-                    onToggleFavorite = { onToggleFavorite(note.id) }
-                )
-            }
-            VisualCardType.CREAM_LECTURE -> {
-                CreamLectureCardContent(
-                    note = note,
-                    onToggleFavorite = { onToggleFavorite(note.id) }
-                )
-            }
-            else -> {
-                StandardNoteCardContent(
-                    note = note,
-                    onToggleFavorite = { onToggleFavorite(note.id) }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun CoralTaskCardContent(
-    note: Note,
-    onToggleFavorite: () -> Unit,
-    onToggleChecklistItem: ((String, String) -> Unit)?
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(20.dp),
-        verticalArrangement = Arrangement.SpaceBetween
-    ) {
-        // Title & Favorite row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
-        ) {
-            Text(
-                text = note.title,
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontFamily = OutfitFontFamily,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    lineHeight = 22.sp,
-                    color = Color(0xFF161616)
-                ),
-                modifier = Modifier.weight(1f)
-            )
-
-            FavoriteIcon(
-                isFavorite = note.isFavorite,
-                tint = Color(0xFF161616),
-                onClick = onToggleFavorite
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Checklist items
         Column(
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp)
         ) {
-            note.checklist.take(4).forEach { item ->
-                ChecklistRow(
-                    item = item,
-                    onToggle = { onToggleChecklistItem?.invoke(note.id, item.id) }
+            // Top row: Title + Actions (Favorite + More Menu)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = note.title.ifBlank { "Untitled Note" },
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontFamily = OutfitFontFamily,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = contentColor
+                        ),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Text(
+                        text = note.updatedAtText,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = OutfitFontFamily,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = contentColor.copy(alpha = 0.6f)
+                        )
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    FavoriteIcon(
+                        isFavorite = note.isFavorite,
+                        tint = contentColor,
+                        onClick = { onToggleFavorite(note.id) }
+                    )
+
+                    if (onDeleteNote != null) {
+                        var menuExpanded by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(
+                                onClick = { menuExpanded = true },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.MoreVert,
+                                    contentDescription = "Options",
+                                    tint = contentColor.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Move to Trash") },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Outlined.DeleteOutline,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onDeleteNote(note.id)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Attached Image preview
+            if (!note.imageUri.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                val context = LocalContext.current
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(note.imageUri)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = "Attached image",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                )
+            }
+
+            // Voice Note Audio Badge
+            if (!note.audioUri.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(contentColor.copy(alpha = 0.12f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.GraphicEq,
+                        contentDescription = "Voice note",
+                        tint = contentColor,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    val durationSec = (note.audioDurationMs / 1000).coerceAtLeast(1)
+                    Text(
+                        text = "Voice Note (${durationSec}s)",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = OutfitFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            color = contentColor
+                        )
+                    )
+                }
+            }
+
+            // Checklist items if present
+            if (note.checklist.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    note.checklist.take(3).forEach { item ->
+                        ChecklistItemRow(
+                            item = item,
+                            onToggle = { onToggleChecklistItem?.invoke(note.id, item.id) }
+                        )
+                    }
+                    if (note.checklist.size > 3) {
+                        Text(
+                            text = "+ ${note.checklist.size - 3} more tasks",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = OutfitFontFamily,
+                                color = contentColor.copy(alpha = 0.6f),
+                                fontWeight = FontWeight.Medium
+                            )
+                        )
+                    }
+                }
+            } else if (note.body.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = note.body,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = OutfitFontFamily,
+                        fontSize = 13.sp,
+                        lineHeight = 17.sp,
+                        color = contentColor.copy(alpha = 0.85f)
+                    ),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -190,17 +288,17 @@ private fun CoralTaskCardContent(
 }
 
 @Composable
-private fun ChecklistRow(
+private fun ChecklistItemRow(
     item: ChecklistItem,
     onToggle: () -> Unit
 ) {
     val haptics = LocalHapticFeedback.current
     val isReducedMotion = rememberReducedMotion()
-    val checkAnim = remember { Animatable(1.0f) }
+    val checkAnim = remember { Animatable(1f) }
     val scope = rememberCoroutineScope()
 
     val textColor by animateColorAsState(
-        targetValue = if (item.isCompleted) Color(0x991E1E1E) else Color(0xFF1E1E1E),
+        targetValue = if (item.isCompleted) Color(0x881E1E1E) else Color(0xFF1E1E1E),
         animationSpec = MotionTokens.fastTween(),
         label = "checklist_text_color"
     )
@@ -226,18 +324,17 @@ private fun ChecklistRow(
                     onToggle()
                 }
             )
-            .padding(vertical = 2.dp),
+            .padding(vertical = 1.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Indicator circle
         Box(
             modifier = Modifier
                 .scale(checkAnim.value)
-                .size(20.dp)
+                .size(18.dp)
                 .clip(CircleShape)
                 .background(checkBgColor)
                 .border(
-                    width = 2.dp,
+                    width = 1.5.dp,
                     color = if (item.isCompleted) Color(0xFF1E1E1E) else Color(0x661E1E1E),
                     shape = CircleShape
                 ),
@@ -248,244 +345,24 @@ private fun ChecklistRow(
                     imageVector = Icons.Outlined.Check,
                     contentDescription = null,
                     tint = Color.White,
-                    modifier = Modifier.size(12.dp)
+                    modifier = Modifier.size(11.dp)
                 )
             }
         }
 
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(8.dp))
 
         Text(
             text = item.text,
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontFamily = OutfitFontFamily,
-                fontSize = 14.sp,
+                fontSize = 13.sp,
                 fontWeight = if (item.isCompleted) FontWeight.Normal else FontWeight.Medium,
                 textDecoration = if (item.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
                 color = textColor
-            )
-        )
-    }
-}
-
-@Composable
-private fun YellowMediaCardContent(
-    note: Note,
-    onToggleFavorite: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(20.dp),
-        verticalArrangement = Arrangement.SpaceBetween
-    ) {
-        // Title & Favorite row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = note.title,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontFamily = OutfitFontFamily,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF161616)
-                    )
-                )
-
-                Text(
-                    text = note.updatedAtText,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = OutfitFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0x99161616)
-                    )
-                )
-            }
-
-            FavoriteIcon(
-                isFavorite = note.isFavorite,
-                tint = Color(0xFF161616),
-                onClick = onToggleFavorite
-            )
-        }
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // Tactile artistic portrait silhouette illustration (matching reference screenshot)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(110.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color(0xFFE2BE38)),
-            contentAlignment = Alignment.BottomCenter
-        ) {
-            Canvas(modifier = Modifier.size(120.dp, 105.dp)) {
-                val width = size.width
-                val height = size.height
-
-                // Elegant editorial portrait profile silhouette
-                val profilePath = Path().apply {
-                    moveTo(width * 0.5f, height)
-                    cubicTo(width * 0.45f, height * 0.7f, width * 0.35f, height * 0.6f, width * 0.35f, height * 0.45f)
-                    cubicTo(width * 0.35f, height * 0.25f, width * 0.55f, height * 0.15f, width * 0.65f, height * 0.25f)
-                    cubicTo(width * 0.75f, height * 0.35f, width * 0.72f, height * 0.5f, width * 0.68f, height * 0.6f)
-                    cubicTo(width * 0.65f, height * 0.75f, width * 0.75f, height * 0.9f, width * 0.8f, height)
-                    close()
-                }
-
-                drawPath(
-                    path = profilePath,
-                    brush = Brush.verticalGradient(
-                        colors = listOf(Color(0xFF4A3423), Color(0xFF2A1C14))
-                    )
-                )
-
-                // Warm sunset rim lighting highlight
-                drawCircle(
-                    color = Color(0x44FFFFFF),
-                    radius = 24.dp.toPx(),
-                    center = Offset(width * 0.6f, height * 0.35f)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun CreamLectureCardContent(
-    note: Note,
-    onToggleFavorite: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 18.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            modifier = Modifier.weight(1f)
-        ) {
-            // Lecture avatar / emoji circular badge (matching reference screenshot)
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFFEBDFAE)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "📝",
-                    fontSize = 20.sp
-                )
-            }
-
-            Column {
-                if (note.noteCountText != null) {
-                    Text(
-                        text = note.noteCountText,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = OutfitFontFamily,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0x99181818)
-                        )
-                    )
-                }
-
-                Text(
-                    text = note.title,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontFamily = OutfitFontFamily,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF181818)
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-
-        FavoriteIcon(
-            isFavorite = note.isFavorite,
-            tint = Color(0xFF181818),
-            onClick = onToggleFavorite
-        )
-    }
-}
-
-@Composable
-private fun StandardNoteCardContent(
-    note: Note,
-    onToggleFavorite: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(20.dp),
-        verticalArrangement = Arrangement.SpaceBetween
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
-        ) {
-            Text(
-                text = note.title,
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontFamily = OutfitFontFamily,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    lineHeight = 22.sp,
-                    color = Color(0xFF181818)
-                ),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-
-            FavoriteIcon(
-                isFavorite = note.isFavorite,
-                tint = Color(0xFF181818),
-                onClick = onToggleFavorite
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        if (note.body.isNotEmpty()) {
-            Text(
-                text = note.body,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = OutfitFontFamily,
-                    fontSize = 13.sp,
-                    lineHeight = 17.sp,
-                    color = Color(0xCC181818)
-                ),
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Text(
-            text = note.updatedAtText,
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontFamily = OutfitFontFamily,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                color = Color(0x99181818)
-            )
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -513,7 +390,6 @@ fun FavoriteIcon(
             haptics.performTap()
             if (!isReducedMotion) {
                 scope.launch {
-                    // Micro-interaction: quick pop and subtle rotation
                     scaleAnim.snapTo(0.75f)
                     rotateAnim.snapTo(if (isFavorite) -10f else 12f)
                     launch {

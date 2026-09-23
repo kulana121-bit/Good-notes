@@ -40,14 +40,16 @@ class FirestoreNotesService(private val context: Context) {
                 "isDeleted" to note.isDeleted,
                 "createdAt" to note.createdAt,
                 "updatedAt" to note.updatedAt,
-                "color" to note.color,
-                "noteType" to note.noteType,
+                "cardType" to note.cardType,
                 "isTodo" to note.isTodo,
                 "isImportant" to note.isImportant,
                 "checklistJson" to note.checklistJson,
                 "sharedWithJson" to note.sharedWithJson,
                 "tagsJson" to note.tagsJson,
                 "noteCountText" to note.noteCountText,
+                "imageUri" to note.imageUri,
+                "audioUri" to note.audioUri,
+                "audioDurationMs" to note.audioDurationMs,
                 "serverUpdatedAt" to FieldValue.serverTimestamp()
             )
 
@@ -84,14 +86,16 @@ class FirestoreNotesService(private val context: Context) {
                 val isDeleted = doc.getBoolean("isDeleted") ?: false
                 val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
                 val updatedAt = doc.getLong("updatedAt") ?: System.currentTimeMillis()
-                val color = doc.getString("color") ?: "CREAM_LECTURE"
-                val noteType = doc.getString("noteType") ?: "TEXT"
+                val cardType = doc.getString("cardType") ?: "CREAM_LECTURE"
                 val isTodo = doc.getBoolean("isTodo") ?: false
                 val isImportant = doc.getBoolean("isImportant") ?: false
                 val checklistJson = doc.getString("checklistJson") ?: "[]"
                 val sharedWithJson = doc.getString("sharedWithJson") ?: "[]"
                 val tagsJson = doc.getString("tagsJson") ?: "[]"
                 val noteCountText = doc.getString("noteCountText")
+                val imageUri = doc.getString("imageUri")
+                val audioUri = doc.getString("audioUri")
+                val audioDurationMs = doc.getLong("audioDurationMs") ?: 0L
 
                 NoteEntity(
                     id = id,
@@ -102,14 +106,16 @@ class FirestoreNotesService(private val context: Context) {
                     isDeleted = isDeleted,
                     createdAt = createdAt,
                     updatedAt = updatedAt,
-                    color = color,
-                    noteType = noteType,
+                    cardType = cardType,
                     isTodo = isTodo,
                     isImportant = isImportant,
                     checklistJson = checklistJson,
                     sharedWithJson = sharedWithJson,
                     tagsJson = tagsJson,
                     noteCountText = noteCountText,
+                    imageUri = imageUri,
+                    audioUri = audioUri,
+                    audioDurationMs = audioDurationMs,
                     syncStatus = "SYNCED",
                     syncedAt = System.currentTimeMillis(),
                     remoteId = id

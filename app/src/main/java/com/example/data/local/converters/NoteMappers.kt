@@ -28,18 +28,20 @@ object NoteMappers {
             title = note.title,
             content = note.body,
             folder = note.folder,
+            cardType = note.cardType.name,
             isFavorite = note.isFavorite,
             isDeleted = note.isDeleted,
             createdAt = note.createdAt,
             updatedAt = note.updatedAt,
-            color = note.cardType.name,
-            noteType = if (note.isTodo) "TODO" else "TEXT",
             isTodo = note.isTodo,
             isImportant = note.isImportant,
             checklistJson = checklistAdapter.toJson(note.checklist),
             sharedWithJson = stringListAdapter.toJson(note.sharedWith),
             tagsJson = stringListAdapter.toJson(note.tags),
-            noteCountText = note.noteCountText
+            noteCountText = note.noteCountText,
+            imageUri = note.imageUri,
+            audioUri = note.audioUri,
+            audioDurationMs = note.audioDurationMs
         )
     }
 
@@ -63,7 +65,7 @@ object NoteMappers {
         }
 
         val cardType = try {
-            VisualCardType.valueOf(entity.color)
+            VisualCardType.valueOf(entity.cardType)
         } catch (_: Exception) {
             VisualCardType.CREAM_LECTURE
         }
@@ -84,7 +86,10 @@ object NoteMappers {
             tags = tags,
             isDeleted = entity.isDeleted,
             createdAt = entity.createdAt,
-            updatedAt = entity.updatedAt
+            updatedAt = entity.updatedAt,
+            imageUri = entity.imageUri,
+            audioUri = entity.audioUri,
+            audioDurationMs = entity.audioDurationMs
         )
     }
 

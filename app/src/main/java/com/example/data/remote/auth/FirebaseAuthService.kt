@@ -91,14 +91,20 @@ class FirebaseAuthService(private val context: Context) {
         )
 
         try {
-            // One option per request per Credential Manager best practices
-            val googleIdOption = if (webClientId.isNullOrBlank()) {
-                GetSignInWithGoogleOption.Builder(
-                    serverClientId = "placeholder-client-id.apps.googleusercontent.com"
-                ).build()
+            val resolvedClientId = if (!webClientId.isNullOrBlank()) {
+                webClientId
             } else {
-                GetSignInWithGoogleOption.Builder(serverClientId = webClientId).build()
+                try {
+                    val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
+                    if (resId != 0) context.getString(resId) else "798861272443-ktn9f4aa93habcpm3464ms28ickvplrd.apps.googleusercontent.com"
+                } catch (_: Exception) {
+                    "798861272443-ktn9f4aa93habcpm3464ms28ickvplrd.apps.googleusercontent.com"
+                }
             }
+
+            val googleIdOption = GetSignInWithGoogleOption.Builder(
+                serverClientId = resolvedClientId
+            ).build()
 
             val request = GetCredentialRequest.Builder()
                 .addCredentialOption(googleIdOption)

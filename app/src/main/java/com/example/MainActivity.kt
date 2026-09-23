@@ -168,9 +168,15 @@ fun NotesApp(
                             onToggleChecklistItem = { noteId, itemId ->
                                 viewModel.toggleChecklistItem(noteId, itemId)
                             },
+                            onDeleteNote = { noteId ->
+                                viewModel.softDeleteNote(noteId)
+                            },
                             onMenuClick = { viewModel.toggleNavigationSheet(true) },
                             onSearchClick = { isSearchActive = true },
-                            onNewNoteClick = { viewModel.openNoteEditor(null) }
+                            onNewNoteClick = { viewModel.openNoteEditor(null) },
+                            onSaveVoiceNote = { audioFile, durationMs ->
+                                viewModel.createVoiceNote(audioFile, durationMs)
+                            }
                         )
                     }
 
@@ -229,9 +235,11 @@ fun NotesApp(
                         DocumentsScreen(
                             documents = documents,
                             onImportDocument = { uri -> viewModel.importDocument(uri) },
+                            onScanDeviceDocuments = { cb -> viewModel.scanDeviceDocuments(cb) },
                             onDocumentClick = { doc -> viewModel.openDocument(doc) },
                             onToggleFavorite = { id -> viewModel.toggleDocumentFavorite(id) },
                             onDeleteDocument = { id -> viewModel.softDeleteDocument(id) },
+                            onPermanentlyDeleteDocument = { id -> viewModel.permanentlyDeleteDocument(id) },
                             onBack = { viewModel.navigateBack() }
                         )
                     }
