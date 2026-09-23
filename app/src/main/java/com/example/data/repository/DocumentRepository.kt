@@ -87,86 +87,75 @@ class DocumentRepository(private val documentDao: DocumentDao) {
             val existingDocs = documentDao.getAllDocumentsDirect()
             val existingPaths = existingDocs.map { it.localPath }.toSet()
 
-            // 1. Scan via MediaStore
-            val projection = arrayOf(
-                MediaStore.Files.FileColumns._ID,
-                MediaStore.Files.FileColumns.DISPLAY_NAME,
-                MediaStore.Files.FileColumns.SIZE,
-                MediaStore.Files.FileColumns.DATA,
-                MediaStore.Files.FileColumns.DATE_MODIFIED
-            )
+            // 1. Scan via MediaStore safely
+            try {
+                val projection = arrayOf(
+                    MediaStore.Files.FileColumns._ID,
+                    MediaStore.Files.FileColumns.DISPLAY_NAME,
+                    MediaStore.Files.FileColumns.SIZE,
+                    MediaStore.Files.FileColumns.DATE_MODIFIED
+                )
 
-            val selection = "${MediaStore.Files.FileColumns.MIME_TYPE} = ? OR ${MediaStore.Files.FileColumns.DATA} LIKE '%.pdf'"
-            val selectionArgs = arrayOf("application/pdf")
-            val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
+                val selection = "${MediaStore.Files.FileColumns.MIME_TYPE} = ? OR ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE '%.pdf'"
+                val selectionArgs = arrayOf("application/pdf")
+                val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
 
-            val queryUri = MediaStore.Files.getContentUri("external")
-            val cursor = context.contentResolver.query(queryUri, projection, selection, selectionArgs, sortOrder)
+                val queryUri = MediaStore.Files.getContentUri("external")
+                val cursor = context.contentResolver.query(queryUri, projection, selection, selectionArgs, sortOrder)
 
-            cursor?.use {
-                val idCol = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
-                val nameCol = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
-                val sizeCol = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
-                val dataCol = it.getColumnIndex(MediaStore.Files.FileColumns.DATA)
-                val dateCol = it.getColumnIndex(MediaStore.Files.FileColumns.DATE_MODIFIED)
+                cursor?.use {
+                    val idCol = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
+                    val nameCol = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
+                    val sizeCol = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
+                    val dateCol = it.getColumnIndex(MediaStore.Files.FileColumns.DATE_MODIFIED)
 
-                while (it.moveToNext()) {
-                    val mediaId = it.getLong(idCol)
-                    val rawName = it.getString(nameCol) ?: "document_${mediaId}.pdf"
-                    val fileSize = it.getLong(sizeCol)
-                    val dataPath = if (dataCol != -1) it.getString(dataCol) else null
-                    val dateModified = if (dateCol != -1) it.getLong(dateCol) * 1000L else System.currentTimeMillis()
-
-                    val targetPath = if (!dataPath.isNullOrBlank() && File(dataPath).exists()) {
-                        dataPath
-                    } else {
-                        ContentUris.withAppendedId(queryUri, mediaId).toString()
-                    }
-
-                    if (!existingPaths.contains(targetPath)) {
-                        // Inspect page count safely without copying
-                        var pageCount = 1
+                    while (it.moveToNext()) {
                         try {
-                            if (targetPath.startsWith("content://")) {
-                                context.contentResolver.openFileDescriptor(Uri.parse(targetPath), "r")?.use { pfd ->
-                                    PdfRenderer(pfd).use { r -> pageCount = r.pageCount }
-                                }
-                            } else {
-                                val file = File(targetPath)
-                                if (file.exists() && file.canRead()) {
-                                    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)?.use { pfd ->
+                            val mediaId = it.getLong(idCol)
+                            val rawName = it.getString(nameCol) ?: "document_${mediaId}.pdf"
+                            val fileSize = it.getLong(sizeCol)
+                            val dateModified = if (dateCol != -1) it.getLong(dateCol) * 1000L else System.currentTimeMillis()
+                            val targetPath = ContentUris.withAppendedId(queryUri, mediaId).toString()
+
+                            if (!existingPaths.contains(targetPath)) {
+                                var pageCount = 1
+                                try {
+                                    context.contentResolver.openFileDescriptor(Uri.parse(targetPath), "r")?.use { pfd ->
                                         PdfRenderer(pfd).use { r -> pageCount = r.pageCount }
                                     }
-                                }
+                                } catch (_: Exception) { }
+
+                                val accentColor = accentColors[(targetPath.hashCode() and 0x7FFFFFFF) % accentColors.size]
+                                val displayName = rawName.removeSuffix(".pdf").replace("_", " ")
+
+                                val docEntity = DocumentEntity(
+                                    id = "pdf_${mediaId}_${UUID.randomUUID().toString().take(4)}",
+                                    fileName = rawName,
+                                    displayName = displayName,
+                                    localPath = targetPath,
+                                    fileSize = fileSize,
+                                    mimeType = "application/pdf",
+                                    pageCount = pageCount.coerceAtLeast(1),
+                                    createdAt = dateModified,
+                                    updatedAt = dateModified,
+                                    lastOpenedAt = dateModified,
+                                    lastOpenedPage = 0,
+                                    isFavorite = false,
+                                    isDeleted = false,
+                                    syncStatus = "SYNCED",
+                                    remoteStorageRef = null,
+                                    accentColorHex = accentColor
+                                )
+                                documentDao.insertDocument(docEntity)
+                                scannedCount++
                             }
-                        } catch (_: Exception) {
+                        } catch (itemErr: Exception) {
+                            Log.w(tag, "Skipping unreadable MediaStore item", itemErr)
                         }
-
-                        val accentColor = accentColors[(targetPath.hashCode() and 0x7FFFFFFF) % accentColors.size]
-                        val displayName = rawName.removeSuffix(".pdf").replace("_", " ")
-
-                        val docEntity = DocumentEntity(
-                            id = "pdf_${mediaId}_${UUID.randomUUID().toString().take(4)}",
-                            fileName = rawName,
-                            displayName = displayName,
-                            localPath = targetPath,
-                            fileSize = fileSize,
-                            mimeType = "application/pdf",
-                            pageCount = pageCount.coerceAtLeast(1),
-                            createdAt = dateModified,
-                            updatedAt = dateModified,
-                            lastOpenedAt = dateModified,
-                            lastOpenedPage = 0,
-                            isFavorite = false,
-                            isDeleted = false,
-                            syncStatus = "SYNCED",
-                            remoteStorageRef = null,
-                            accentColorHex = accentColor
-                        )
-                        documentDao.insertDocument(docEntity)
-                        scannedCount++
                     }
                 }
+            } catch (mediaStoreErr: Exception) {
+                Log.w(tag, "MediaStore query error", mediaStoreErr)
             }
 
             // 2. Scan standard storage Download & Documents directories directly

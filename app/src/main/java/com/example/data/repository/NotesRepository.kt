@@ -3,22 +3,25 @@ package com.example.data.repository
 import androidx.compose.ui.graphics.Color
 import com.example.data.local.NotesDatabase
 import com.example.data.local.converters.NoteMappers
+import com.example.data.local.dao.FolderDao
+import com.example.data.local.dao.NoteDao
+import com.example.data.local.dao.SettingDao
 import com.example.data.local.entity.FolderEntity
+import com.example.data.local.entity.NoteEntity
 import com.example.data.local.entity.SettingEntity
 import com.example.data.model.Folder
-import com.example.data.model.InitialNotes
 import com.example.data.model.Note
 import com.example.data.model.SampleFolders
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import java.util.UUID
 
-class NotesRepository(private val database: NotesDatabase) {
-
-    private val noteDao = database.noteDao()
-    private val folderDao = database.folderDao()
-    private val settingDao = database.settingDao()
+class NotesRepository(
+    private val database: NotesDatabase,
+    private val noteDao: NoteDao = database.noteDao(),
+    private val folderDao: FolderDao = database.folderDao(),
+    private val settingDao: SettingDao = database.settingDao()
+) {
 
     val allNotes: Flow<List<Note>> = noteDao.getActiveNotes().map { entities ->
         entities.map { NoteMappers.toDomain(it) }
@@ -32,12 +35,11 @@ class NotesRepository(private val database: NotesDatabase) {
         entities.map { NoteMappers.toDomain(it) }
     }
 
-    val folders: Flow<List<Folder>> = combine(folderDao.getAllFolders(), noteDao.getActiveNotes()) { folderEntities, activeNotes ->
-        folderEntities.map { entity ->
-            val count = activeNotes.count { it.folder.equals(entity.name, ignoreCase = true) }
-            NoteMappers.toDomainFolder(entity, count)
-        }
+    val allFolders: Flow<List<Folder>> = folderDao.getAllFolders().map { entities ->
+        entities.map { NoteMappers.toDomainFolder(it, 0) }
     }
+
+    val folders: Flow<List<Folder>> = allFolders
 
     val activeNotesCount: Flow<Int> = noteDao.getActiveNotesCount()
     val favoritesCount: Flow<Int> = noteDao.getFavoritesCount()
@@ -71,6 +73,10 @@ class NotesRepository(private val database: NotesDatabase) {
     }
 
     suspend fun saveNote(note: Note) {
+        val existing = noteDao.getNoteByIdDirect(note.id)
+        if (existing != null && existing.isDeleted && !note.isDeleted) {
+            return
+        }
         val updatedTimestamp = System.currentTimeMillis()
         val toSave = note.copy(
             updatedAt = updatedTimestamp,
@@ -108,7 +114,7 @@ class NotesRepository(private val database: NotesDatabase) {
         val trimmed = name.trim()
         if (trimmed.isBlank()) return false
         val existing = folderDao.getFolderByName(trimmed)
-        if (existing != null) return false // Prevent duplicate folder names
+        if (existing != null) return false
         val entity = FolderEntity(
             id = "folder_${UUID.randomUUID().toString().take(8)}",
             name = trimmed,
@@ -125,9 +131,8 @@ class NotesRepository(private val database: NotesDatabase) {
             return false
         }
         val existing = folderDao.getFolderByName(trimmedNew)
-        if (existing != null) return false // Prevent collision with existing folder
+        if (existing != null) return false
 
-        // Critical Room Transaction: renames folder entity AND updates all notes belonging to oldName
         database.renameFolderWithNotes(oldName, trimmedNew)
         return true
     }
@@ -145,51 +150,25 @@ class NotesRepository(private val database: NotesDatabase) {
         settingDao.setSetting(SettingEntity(key, value))
     }
 
-    fun isDarkMode(): Flow<Boolean> {
-        return getSetting("dark_mode", "true").map { it.toBooleanStrictOrNull() ?: true }
-    }
+    fun isDarkMode(): Flow<Boolean> = getSetting("dark_mode", "true").map { it.toBoolean() }
+    suspend fun setDarkMode(enabled: Boolean) = setSetting("dark_mode", enabled.toString())
 
-    suspend fun setDarkMode(enabled: Boolean) {
-        setSetting("dark_mode", enabled.toString())
-    }
+    fun isAutoSave(): Flow<Boolean> = getSetting("auto_save", "true").map { it.toBoolean() }
+    suspend fun setAutoSave(enabled: Boolean) = setSetting("auto_save", enabled.toString())
 
-    fun isAutoSave(): Flow<Boolean> {
-        return getSetting("auto_save", "true").map { it.toBooleanStrictOrNull() ?: true }
-    }
+    fun getSelectedFont(): Flow<String> = getSetting("selected_font", "Outfit (Editorial)")
+    suspend fun setSelectedFont(fontName: String) = setSetting("selected_font", fontName)
 
-    suspend fun setAutoSave(enabled: Boolean) {
-        setSetting("auto_save", enabled.toString())
-    }
+    fun getBaseTextSize(): Flow<Float> = getSetting("base_text_size", "16").map { it.toFloatOrNull() ?: 16f }
+    suspend fun setBaseTextSize(size: Float) = setSetting("base_text_size", size.toString())
 
-    fun getSelectedFont(): Flow<String> {
-        return getSetting("selected_font", "Outfit (Editorial)")
-    }
-
-    suspend fun setSelectedFont(font: String) {
-        setSetting("selected_font", font)
-    }
-
-    fun getBaseTextSize(): Flow<Float> {
-        return getSetting("base_text_size", "16").map { it.toFloatOrNull() ?: 16f }
-    }
-
-    suspend fun setBaseTextSize(size: Float) {
-        setSetting("base_text_size", size.toString())
-    }
-
-    fun getDefaultSortOrder(): Flow<String> {
-        return getSetting("default_sort_order", "Recently Modified")
-    }
-
-    suspend fun setDefaultSortOrder(order: String) {
-        setSetting("default_sort_order", order)
-    }
+    fun getDefaultSortOrder(): Flow<String> = getSetting("default_sort_order", "Recently Modified")
+    suspend fun setDefaultSortOrder(order: String) = setSetting("default_sort_order", order)
 
     /**
-     * Seeds initial folders if needed and ensures all dummy notes are cleared.
+     * Seeds initial folders if database is brand new.
      */
     suspend fun seedInitialDataIfNeeded() {
-        // Purge dummy notes if present
         val dummyIds = listOf("note_1", "note_2", "note_3", "note_4", "note_5", "note_6", "note_7", "note_8")
         dummyIds.forEach { dummyId ->
             noteDao.permanentlyDeleteNote(dummyId)

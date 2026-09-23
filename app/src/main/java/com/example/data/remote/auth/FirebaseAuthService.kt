@@ -7,12 +7,12 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.UserProfileChangeRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -27,7 +27,8 @@ data class UserSummary(
     val uid: String,
     val displayName: String?,
     val email: String?,
-    val photoUrl: String?
+    val photoUrl: String?,
+    val isAnonymous: Boolean = false
 )
 
 class FirebaseAuthService(private val context: Context) {
@@ -53,9 +54,10 @@ class FirebaseAuthService(private val context: Context) {
         auth?.currentUser?.let { user ->
             _currentUser.value = UserSummary(
                 uid = user.uid,
-                displayName = user.displayName,
-                email = user.email,
-                photoUrl = user.photoUrl?.toString()
+                displayName = user.displayName ?: if (user.isAnonymous) "Guest User" else "User",
+                email = user.email ?: if (user.isAnonymous) "guest@synced.cloud" else null,
+                photoUrl = user.photoUrl?.toString(),
+                isAnonymous = user.isAnonymous
             )
         }
     }
@@ -73,9 +75,10 @@ class FirebaseAuthService(private val context: Context) {
             val summary = user?.let {
                 UserSummary(
                     uid = it.uid,
-                    displayName = it.displayName,
-                    email = it.email,
-                    photoUrl = it.photoUrl?.toString()
+                    displayName = it.displayName ?: if (it.isAnonymous) "Guest User" else "User",
+                    email = it.email ?: if (it.isAnonymous) "guest@synced.cloud" else null,
+                    photoUrl = it.photoUrl?.toString(),
+                    isAnonymous = it.isAnonymous
                 )
             }
             _currentUser.value = summary
@@ -126,13 +129,14 @@ class FirebaseAuthService(private val context: Context) {
                         uid = user.uid,
                         displayName = user.displayName ?: googleIdTokenCredential.displayName,
                         email = user.email ?: googleIdTokenCredential.id,
-                        photoUrl = user.photoUrl?.toString() ?: googleIdTokenCredential.profilePictureUri?.toString()
+                        photoUrl = user.photoUrl?.toString() ?: googleIdTokenCredential.profilePictureUri?.toString(),
+                        isAnonymous = false
                     )
                     _currentUser.value = summary
                     return@withContext Result.success(summary)
                 }
             }
-            Result.failure(Exception("Unsupported credential type returned"))
+            Result.failure(Exception("Google Sign-In returned unsupported credential type."))
         } catch (e: GetCredentialCancellationException) {
             Log.w(tag, "Google Sign-In was cancelled by user: ${e.message}")
             Result.failure(e)
@@ -142,10 +146,79 @@ class FirebaseAuthService(private val context: Context) {
         }
     }
 
+    suspend fun signInWithEmail(email: String, pass: String): Result<UserSummary> = withContext(Dispatchers.IO) {
+        val authInstance = auth ?: return@withContext Result.failure(Exception("Firebase Auth not initialized."))
+        try {
+            val authResult = authInstance.signInWithEmailAndPassword(email.trim(), pass).await()
+            val user = authResult.user ?: return@withContext Result.failure(Exception("User is null after sign in"))
+            val summary = UserSummary(
+                uid = user.uid,
+                displayName = user.displayName ?: email.substringBefore("@"),
+                email = user.email ?: email,
+                photoUrl = user.photoUrl?.toString(),
+                isAnonymous = false
+            )
+            _currentUser.value = summary
+            Result.success(summary)
+        } catch (e: Exception) {
+            Log.e(tag, "Email Sign-In failed", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun signUpWithEmail(email: String, pass: String, name: String): Result<UserSummary> = withContext(Dispatchers.IO) {
+        val authInstance = auth ?: return@withContext Result.failure(Exception("Firebase Auth not initialized."))
+        try {
+            val authResult = authInstance.createUserWithEmailAndPassword(email.trim(), pass).await()
+            val user = authResult.user ?: return@withContext Result.failure(Exception("User is null after registration"))
+            if (name.isNotBlank()) {
+                try {
+                    user.updateProfile(
+                        UserProfileChangeRequest.Builder().setDisplayName(name.trim()).build()
+                    ).await()
+                } catch (_: Exception) { }
+            }
+            val summary = UserSummary(
+                uid = user.uid,
+                displayName = name.ifBlank { email.substringBefore("@") },
+                email = user.email ?: email,
+                photoUrl = user.photoUrl?.toString(),
+                isAnonymous = false
+            )
+            _currentUser.value = summary
+            Result.success(summary)
+        } catch (e: Exception) {
+            Log.e(tag, "Email Registration failed", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun signInAnonymously(): Result<UserSummary> = withContext(Dispatchers.IO) {
+        val authInstance = auth ?: return@withContext Result.failure(Exception("Firebase Auth not initialized."))
+        try {
+            val authResult = authInstance.signInAnonymously().await()
+            val user = authResult.user ?: return@withContext Result.failure(Exception("Anonymous user is null"))
+            val summary = UserSummary(
+                uid = user.uid,
+                displayName = "Guest User",
+                email = "guest@cloudsync.app",
+                photoUrl = null,
+                isAnonymous = true
+            )
+            _currentUser.value = summary
+            Result.success(summary)
+        } catch (e: Exception) {
+            Log.e(tag, "Anonymous Sign-In failed", e)
+            Result.failure(e)
+        }
+    }
+
     suspend fun signOut(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             auth?.signOut()
-            credentialManager.clearCredentialState(ClearCredentialStateRequest())
+            try {
+                credentialManager.clearCredentialState(ClearCredentialStateRequest())
+            } catch (_: Exception) { }
             _currentUser.value = null
             Result.success(Unit)
         } catch (e: Exception) {

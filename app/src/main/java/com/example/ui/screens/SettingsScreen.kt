@@ -21,25 +21,28 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CloudDone
-import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.CloudSync
-import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.ColorLens
 import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.Nightlight
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.WbSunny
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -48,6 +51,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SnackbarHost
@@ -55,9 +59,14 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,14 +74,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.backup.RestoreResultSummary
 import com.example.data.remote.auth.UserSummary
 import com.example.data.sync.SyncReport
 import com.example.data.sync.SyncState
-import com.example.ui.theme.NoteMint
 import com.example.ui.theme.NoteCoral
+import com.example.ui.theme.NoteMint
 import com.example.ui.theme.NoteYellow
 import com.example.ui.theme.OutfitFontFamily
 import kotlinx.coroutines.launch
@@ -96,7 +107,10 @@ fun SettingsScreen(
     syncState: SyncState = SyncState.SYNCED,
     lastSyncTimestamp: Long = 0L,
     lastSyncReport: SyncReport? = null,
-    onSignIn: () -> Unit = {},
+    onSignInWithGoogle: ((Result<UserSummary>) -> Unit) -> Unit = {},
+    onSignInWithEmail: (email: String, pass: String, (Result<UserSummary>) -> Unit) -> Unit = { _, _, _ -> },
+    onSignUpWithEmail: (email: String, pass: String, name: String, (Result<UserSummary>) -> Unit) -> Unit = { _, _, _, _ -> },
+    onSignInAnonymously: ((Result<UserSummary>) -> Unit) -> Unit = {},
     onSignOut: () -> Unit = {},
     onSyncNow: () -> Unit = {},
     onExportBackup: (Uri, (Result<Int>) -> Unit) -> Unit = { _, _ -> },
@@ -106,6 +120,8 @@ fun SettingsScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    var isAuthDialogOpen by remember { mutableStateOf(false) }
 
     val exportBackupLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/zip")
@@ -174,29 +190,17 @@ fun SettingsScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(16.dp))
 
-                Column {
-                    Text(
-                        text = "Settings",
-                        style = MaterialTheme.typography.displayMedium.copy(
-                            fontFamily = OutfitFontFamily,
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
+                Text(
+                    text = "Settings",
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontFamily = OutfitFontFamily,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
                     )
-                    Text(
-                        text = "Preferences, Cloud Sync & Data",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = OutfitFontFamily,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-                        )
-                    )
-                }
+                )
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
 
             Column(
                 modifier = Modifier
@@ -245,7 +249,7 @@ fun SettingsScreen(
                                             )
                                         )
                                         Text(
-                                            text = currentUser.email ?: "Firebase Account",
+                                            text = currentUser.email ?: if (currentUser.isAnonymous) "Guest Account" else "Cloud Account",
                                             style = MaterialTheme.typography.bodySmall.copy(
                                                 fontFamily = OutfitFontFamily,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -285,7 +289,7 @@ fun SettingsScreen(
                                         )
                                     )
                                     Text(
-                                        text = "Sign in to synchronize your notes across devices automatically.",
+                                        text = "Sign in to synchronize your notes & drawings across devices automatically.",
                                         style = MaterialTheme.typography.bodySmall.copy(
                                             fontFamily = OutfitFontFamily,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -296,13 +300,13 @@ fun SettingsScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
 
                                 Button(
-                                    onClick = onSignIn,
+                                    onClick = { isAuthDialogOpen = true },
                                     shape = RoundedCornerShape(16.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = MaterialTheme.colorScheme.primary,
                                         contentColor = MaterialTheme.colorScheme.onPrimary
                                     ),
-                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                                 ) {
                                     Text(
                                         text = "Sign In",
@@ -320,380 +324,259 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
                         )
 
-                        // Sync State row
+                        // Sync Status row
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                val syncStatusColor = when (syncState) {
-                                    SyncState.SYNCED -> NoteMint
-                                    SyncState.SYNCING -> NoteYellow
-                                    SyncState.OFFLINE -> Color(0xFF888888)
-                                    SyncState.SIGN_IN_REQUIRED -> NoteCoral
-                                    SyncState.ERROR -> MaterialTheme.colorScheme.error
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .size(10.dp)
-                                        .clip(CircleShape)
-                                        .background(syncStatusColor)
-                                )
-
-                                Column {
-                                    Text(
-                                        text = "Sync: ${syncState.label}",
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            fontFamily = OutfitFontFamily,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    )
-                                    if (lastSyncTimestamp > 0) {
-                                        val timeStr = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(lastSyncTimestamp))
-                                        Text(
-                                            text = "Last synced today at $timeStr",
-                                            style = MaterialTheme.typography.bodySmall.copy(
-                                                fontFamily = OutfitFontFamily,
-                                                fontSize = 11.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        )
-                                    }
-                                }
-                            }
-
-                            Button(
-                                onClick = onSyncNow,
-                                enabled = syncState != SyncState.SYNCING,
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.surface,
-                                    contentColor = MaterialTheme.colorScheme.onSurface
-                                ),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                            ) {
-                                if (syncState == SyncState.SYNCING) {
-                                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                                } else {
-                                    Icon(imageVector = Icons.Outlined.Sync, contentDescription = null, modifier = Modifier.size(14.dp))
-                                }
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Sync Now",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontFamily = OutfitFontFamily,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Backup & Restore Section
-                SettingsSection(title = "Backup & Archive", icon = Icons.Outlined.FileDownload) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Text(
-                            text = "Export and import your entire digital notebook library including all notes, folders, custom tags, and attached PDF documents in a self-contained ZIP archive.",
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = OutfitFontFamily,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                lineHeight = 18.sp
-                            )
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Button(
-                                onClick = {
-                                    val timestamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
-                                    exportBackupLauncher.launch("notes_backup_$timestamp.zip")
-                                },
-                                shape = RoundedCornerShape(16.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primary,
-                                    contentColor = MaterialTheme.colorScheme.onPrimary
-                                ),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Icon(imageVector = Icons.Outlined.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Text(
-                                        text = "Export ZIP",
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            fontFamily = OutfitFontFamily,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    )
-                                }
-                            }
-
-                            OutlinedButton(
-                                onClick = {
-                                    restoreBackupLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
-                                },
-                                shape = RoundedCornerShape(16.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Icon(imageVector = Icons.Outlined.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Text(
-                                        text = "Restore Archive",
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            fontFamily = OutfitFontFamily,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Theme & Appearance Section
-                SettingsSection(title = "Appearance", icon = Icons.Outlined.ColorLens) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (isDarkMode) Icons.Outlined.Nightlight else Icons.Outlined.WbSunny,
-                                contentDescription = null,
-                                tint = if (isDarkMode) NoteYellow else NoteCoral,
-                                modifier = Modifier.size(22.dp)
-                            )
                             Column {
+                                val syncLabel = when (syncState) {
+                                    SyncState.SYNCING -> "Syncing with Cloud..."
+                                    SyncState.SYNCED -> "All changes synced"
+                                    SyncState.OFFLINE -> "Working Offline"
+                                    SyncState.SIGN_IN_REQUIRED -> "Sign in to enable sync"
+                                    SyncState.ERROR -> "Sync attention needed"
+                                }
                                 Text(
-                                    text = "Dark Mode",
-                                    style = MaterialTheme.typography.titleSmall.copy(
+                                    text = syncLabel,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
                                         fontFamily = OutfitFontFamily,
-                                        fontWeight = FontWeight.Bold,
+                                        fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                 )
+                                val lastSyncFormatted = if (lastSyncTimestamp > 0) {
+                                    SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(lastSyncTimestamp))
+                                } else "Not synced yet"
                                 Text(
-                                    text = if (isDarkMode) "Near-black editorial palette" else "Warm digital paper tones",
-                                    style = MaterialTheme.typography.bodySmall.copy(
+                                    text = "Last: $lastSyncFormatted",
+                                    style = MaterialTheme.typography.labelSmall.copy(
                                         fontFamily = OutfitFontFamily,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 )
                             }
-                        }
 
-                        Switch(
-                            checked = isDarkMode,
-                            onCheckedChange = onToggleDarkMode,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = NoteYellow,
-                                checkedTrackColor = Color(0xFF222226),
-                                uncheckedThumbColor = Color(0xFF141414),
-                                uncheckedTrackColor = Color(0xFFE5DECE)
-                            )
-                        )
-                    }
-                }
-
-                // Editor Settings
-                SettingsSection(title = "Editor", icon = Icons.Outlined.EditNote) {
-                    // Font Selector
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                        Text(
-                            text = "Typography",
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontFamily = OutfitFontFamily,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            listOf("Outfit (Editorial)", "Serif", "Mono").forEach { fontName ->
-                                val isSelected = fontName == selectedFont
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(
-                                            if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-                                        )
-                                        .clickable { onSelectFont(fontName) }
-                                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                                ) {
-                                    Text(
-                                        text = fontName,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontFamily = OutfitFontFamily,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-                                        )
+                            OutlinedButton(
+                                onClick = onSyncNow,
+                                enabled = syncState != SyncState.SYNCING,
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                if (syncState == SyncState.SYNCING) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary
                                     )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Sync,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Sync Now", fontFamily = OutfitFontFamily, fontSize = 13.sp)
                                 }
                             }
                         }
                     }
-
-                    // Text Size Slider
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Base Font Size",
-                                style = MaterialTheme.typography.titleSmall.copy(
-                                    fontFamily = OutfitFontFamily,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            )
-                            Text(
-                                text = "${baseTextSize.toInt()} sp",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = OutfitFontFamily,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            )
-                        }
-
-                        Slider(
-                            value = baseTextSize,
-                            onValueChange = onChangeBaseTextSize,
-                            valueRange = 14f..22f,
-                            steps = 3,
-                            colors = SliderDefaults.colors(
-                                thumbColor = MaterialTheme.colorScheme.primary,
-                                activeTrackColor = MaterialTheme.colorScheme.primary
-                            )
-                        )
-                    }
-
-                    // Auto-save toggle
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(
-                                text = "Auto-save Drafts",
-                                style = MaterialTheme.typography.titleSmall.copy(
-                                    fontFamily = OutfitFontFamily,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            )
-                            Text(
-                                text = "Continuous state persistence",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = OutfitFontFamily,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            )
-                        }
-
-                        Switch(
-                            checked = isAutoSave,
-                            onCheckedChange = onToggleAutoSave,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = NoteYellow,
-                                checkedTrackColor = Color(0xFF222226)
-                            )
-                        )
-                    }
                 }
 
-                // Notes Organization
-                SettingsSection(title = "Notes & Sorting", icon = Icons.Outlined.Tune) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                        Text(
-                            text = "Default Sort Order",
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontFamily = OutfitFontFamily,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        listOf("Recently Modified", "Alphabetical (A-Z)", "Important First").forEach { sort ->
-                            val isSelected = sort == selectedSortOrder
+                // Appearance & Reading Section
+                SettingsSection(title = "Appearance & Reading", icon = Icons.Outlined.ColorLens) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        // Dark mode switch
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onToggleDarkMode(!isDarkMode) },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable { onSelectSortOrder(sort) }
-                                    .padding(vertical = 8.dp, horizontal = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isDarkMode) Icons.Outlined.Nightlight else Icons.Outlined.WbSunny,
+                                    contentDescription = null,
+                                    tint = if (isDarkMode) NoteYellow else NoteCoral,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Dark Theme",
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontFamily = OutfitFontFamily,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    )
+                                    Text(
+                                        text = if (isDarkMode) "Deep matte charcoal aesthetic" else "Warm paper editorial vibe",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = OutfitFontFamily,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    )
+                                }
+                            }
+
+                            Switch(
+                                checked = isDarkMode,
+                                onCheckedChange = onToggleDarkMode,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                                )
+                            )
+                        }
+
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 12.dp),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                        )
+
+                        // Auto-Save Switch
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onToggleAutoSave(!isAutoSave) },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.EditNote,
+                                    contentDescription = null,
+                                    tint = NoteMint,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Instant Auto-Save",
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontFamily = OutfitFontFamily,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    )
+                                    Text(
+                                        text = "Persist every keystroke in background",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = OutfitFontFamily,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    )
+                                }
+                            }
+
+                            Switch(
+                                checked = isAutoSave,
+                                onCheckedChange = onToggleAutoSave,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                                )
+                            )
+                        }
+
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 12.dp),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                        )
+
+                        // Base Typography Size
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = sort,
+                                    text = "Base Note Font Size",
                                     style = MaterialTheme.typography.bodyMedium.copy(
                                         fontFamily = OutfitFontFamily,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                 )
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Check,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
+                                Text(
+                                    text = "${baseTextSize.toInt()} sp",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
                                     )
-                                }
+                                )
+                            }
+                            Slider(
+                                value = baseTextSize,
+                                onValueChange = onChangeBaseTextSize,
+                                valueRange = 14f..22f,
+                                steps = 3,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = MaterialTheme.colorScheme.primary,
+                                    activeTrackColor = MaterialTheme.colorScheme.primary
+                                )
+                            )
+                        }
+                    }
+                }
+
+                // Backup & Migration Section
+                SettingsSection(title = "Local Backup & Export", icon = Icons.Outlined.FileUpload) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val dateStr = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+                                    exportBackupLauncher.launch("notes_vault_backup_$dateStr.zip")
+                                },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurface),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Outlined.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Export ZIP", fontFamily = OutfitFontFamily, fontSize = 13.sp)
+                            }
+
+                            Button(
+                                onClick = { restoreBackupLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurface),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Outlined.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Restore ZIP", fontFamily = OutfitFontFamily, fontSize = 13.sp)
                             }
                         }
                     }
                 }
 
-                // About & Craftsmanship
+                // App Info & Version
                 SettingsSection(title = "About", icon = Icons.Outlined.Info) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                    Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "NOTES v2.0.0",
-                            style = MaterialTheme.typography.titleSmall.copy(
+                            text = "Notes & PDF Vault",
+                            style = MaterialTheme.typography.titleMedium.copy(
                                 fontFamily = OutfitFontFamily,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Crafted with pure Jetpack Compose, edge-to-edge layout, tactile digital paper textures, native PDF rendering, full archive backup/restore, and Firebase Cloud sync.",
+                            text = "Version 1.2.0 • Editorial Design & Local PDF Storage",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 fontFamily = OutfitFontFamily,
-                                lineHeight = 18.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         )
@@ -704,13 +587,218 @@ fun SettingsScreen(
             }
         }
 
+        // Comprehensive Authentication Dialog
+        if (isAuthDialogOpen) {
+            AuthModalDialog(
+                onDismiss = { isAuthDialogOpen = false },
+                onGoogleSignIn = {
+                    onSignInWithGoogle { result ->
+                        coroutineScope.launch {
+                            if (result.isSuccess) {
+                                isAuthDialogOpen = false
+                                snackbarHostState.showSnackbar("Welcome, ${result.getOrNull()?.displayName ?: "User"}!")
+                            } else {
+                                snackbarHostState.showSnackbar("Google Sign-In: ${result.exceptionOrNull()?.localizedMessage ?: "Failed"}")
+                            }
+                        }
+                    }
+                },
+                onEmailSignIn = { email, pass, onComplete ->
+                    onSignInWithEmail(email, pass) { res ->
+                        onComplete(res)
+                        if (res.isSuccess) {
+                            isAuthDialogOpen = false
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Signed in as ${res.getOrNull()?.displayName}!")
+                            }
+                        }
+                    }
+                },
+                onEmailSignUp = { email, pass, name, onComplete ->
+                    onSignUpWithEmail(email, pass, name) { res ->
+                        onComplete(res)
+                        if (res.isSuccess) {
+                            isAuthDialogOpen = false
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Account created! Welcome, ${res.getOrNull()?.displayName}!")
+                            }
+                        }
+                    }
+                },
+                onAnonymousSignIn = { onComplete ->
+                    onSignInAnonymously { res ->
+                        onComplete(res)
+                        if (res.isSuccess) {
+                            isAuthDialogOpen = false
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Signed in as Guest with Cloud Sync enabled!")
+                            }
+                        }
+                    }
+                }
+            )
+        }
+
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 24.dp)
+                .padding(bottom = 16.dp)
         )
     }
+}
+
+@Composable
+private fun AuthModalDialog(
+    onDismiss: () -> Unit,
+    onGoogleSignIn: () -> Unit,
+    onEmailSignIn: (email: String, pass: String, (Result<UserSummary>) -> Unit) -> Unit,
+    onEmailSignUp: (email: String, pass: String, name: String, (Result<UserSummary>) -> Unit) -> Unit,
+    onAnonymousSignIn: ((Result<UserSummary>) -> Unit) -> Unit
+) {
+    var isSignUpMode by remember { mutableStateOf(false) }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var isSubmitting by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = if (isSignUpMode) "Create Cloud Account" else "Sign In to Cloud Sync",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontFamily = OutfitFontFamily,
+                    fontWeight = FontWeight.Bold
+                )
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Google One-Tap Quick Button
+                Button(
+                    onClick = onGoogleSignIn,
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF141414),
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Sign In with Google One-Tap", fontFamily = OutfitFontFamily, fontWeight = FontWeight.Bold)
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+                    Text(" or with email ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+                }
+
+                if (isSignUpMode) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it; errorMessage = null },
+                        label = { Text("Display Name") },
+                        leadingIcon = { Icon(Icons.Outlined.Person, contentDescription = null) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it; errorMessage = null },
+                    label = { Text("Email Address") },
+                    leadingIcon = { Icon(Icons.Outlined.Email, contentDescription = null) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it; errorMessage = null },
+                    label = { Text("Password") },
+                    leadingIcon = { Icon(Icons.Outlined.Lock, contentDescription = null) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (errorMessage != null) {
+                    Text(
+                        text = errorMessage ?: "",
+                        style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.error)
+                    )
+                }
+
+                // Guest Cloud Option
+                TextButton(
+                    onClick = {
+                        isSubmitting = true
+                        onAnonymousSignIn { res ->
+                            isSubmitting = false
+                            if (res.isFailure) {
+                                errorMessage = res.exceptionOrNull()?.localizedMessage ?: "Guest login failed"
+                            }
+                        }
+                    },
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                ) {
+                    Text("Continue as Guest (No password required)", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (email.isBlank() || password.isBlank()) {
+                        errorMessage = "Please enter email and password"
+                        return@Button
+                    }
+                    isSubmitting = true
+                    if (isSignUpMode) {
+                        onEmailSignUp(email, password, name) { res ->
+                            isSubmitting = false
+                            if (res.isFailure) {
+                                errorMessage = res.exceptionOrNull()?.localizedMessage ?: "Sign up failed"
+                            }
+                        }
+                    } else {
+                        onEmailSignIn(email, password) { res ->
+                            isSubmitting = false
+                            if (res.isFailure) {
+                                errorMessage = res.exceptionOrNull()?.localizedMessage ?: "Sign in failed"
+                            }
+                        }
+                    }
+                },
+                enabled = !isSubmitting,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                if (isSubmitting) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                } else {
+                    Text(if (isSignUpMode) "Register" else "Log In", fontFamily = OutfitFontFamily, fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { isSignUpMode = !isSignUpMode; errorMessage = null }) {
+                Text(if (isSignUpMode) "Already have an account? Log In" else "Create an Account")
+            }
+        }
+    )
 }
 
 @Composable
@@ -719,11 +807,11 @@ private fun SettingsSection(
     icon: ImageVector,
     content: @Composable () -> Unit
 ) {
-    Column {
+    Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(start = 6.dp, bottom = 8.dp)
+            modifier = Modifier.padding(bottom = 8.dp)
         ) {
             Icon(
                 imageVector = icon,
@@ -736,7 +824,7 @@ private fun SettingsSection(
                 style = MaterialTheme.typography.labelLarge.copy(
                     fontFamily = OutfitFontFamily,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
+                    color = MaterialTheme.colorScheme.primary
                 )
             )
         }
@@ -744,12 +832,10 @@ private fun SettingsSection(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(24.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clip(RoundedCornerShape(20.dp))
+                .background(MaterialTheme.colorScheme.surface)
         ) {
-            Column {
-                content()
-            }
+            content()
         }
     }
 }

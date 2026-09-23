@@ -274,11 +274,14 @@ class NotesViewModel(
     }
 
     fun softDeleteNote(noteId: String) {
+        autosaveJob?.cancel()
+        autosaveJob = null
+        if (_selectedNote.value?.id == noteId) {
+            _selectedNote.value = null
+            navigateBack()
+        }
         viewModelScope.launch {
             repository.softDeleteNote(noteId)
-            if (_selectedNote.value?.id == noteId) {
-                navigateBack()
-            }
         }
     }
 
@@ -289,12 +292,17 @@ class NotesViewModel(
     }
 
     fun permanentlyDeleteNote(noteId: String) {
+        autosaveJob?.cancel()
+        if (_selectedNote.value?.id == noteId) {
+            _selectedNote.value = null
+        }
         viewModelScope.launch {
             repository.permanentlyDeleteNote(noteId)
         }
     }
 
     fun emptyTrash() {
+        autosaveJob?.cancel()
         viewModelScope.launch {
             repository.emptyTrash()
         }
@@ -455,6 +463,36 @@ class NotesViewModel(
     fun signInWithGoogle(webClientId: String? = null, onResult: (Result<UserSummary>) -> Unit) {
         viewModelScope.launch {
             val result = authService.signInWithGoogle(webClientId)
+            if (result.isSuccess) {
+                syncManager.syncNow()
+            }
+            onResult(result)
+        }
+    }
+
+    fun signInWithEmail(email: String, pass: String, onResult: (Result<UserSummary>) -> Unit) {
+        viewModelScope.launch {
+            val result = authService.signInWithEmail(email, pass)
+            if (result.isSuccess) {
+                syncManager.syncNow()
+            }
+            onResult(result)
+        }
+    }
+
+    fun signUpWithEmail(email: String, pass: String, name: String, onResult: (Result<UserSummary>) -> Unit) {
+        viewModelScope.launch {
+            val result = authService.signUpWithEmail(email, pass, name)
+            if (result.isSuccess) {
+                syncManager.syncNow()
+            }
+            onResult(result)
+        }
+    }
+
+    fun signInAnonymously(onResult: (Result<UserSummary>) -> Unit) {
+        viewModelScope.launch {
+            val result = authService.signInAnonymously()
             if (result.isSuccess) {
                 syncManager.syncNow()
             }

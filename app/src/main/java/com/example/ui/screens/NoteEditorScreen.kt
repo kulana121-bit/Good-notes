@@ -11,7 +11,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -82,9 +81,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -99,6 +96,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.ChecklistItem
 import com.example.data.model.Note
+import com.example.ui.components.SketchPadModal
 import com.example.ui.theme.MotionTokens
 import com.example.ui.theme.NoteCoral
 import com.example.ui.theme.NoteLavender
@@ -141,7 +139,7 @@ fun NoteEditorScreen(
     // Text formatting / selection state
     var isTextSelectionActive by remember { mutableStateOf(false) }
     var selectedFontSize by remember { mutableStateOf(16) }
-    var isDoodleActive by remember { mutableStateOf(false) }
+    var isSketchModalOpen by remember { mutableStateOf(false) }
 
     // Audio Player & Recorder
     val audioPlayer = remember { AudioPlayerManager(context) }
@@ -154,6 +152,8 @@ fun NoteEditorScreen(
     var recordingDurationSec by remember { mutableIntStateOf(0) }
     var isRecordingModalOpen by remember { mutableStateOf(false) }
 
+    var isDeletedLocally by remember { mutableStateOf(false) }
+
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -165,6 +165,7 @@ fun NoteEditorScreen(
         aud: String? = attachedAudioUri,
         audDur: Long = attachedAudioDurationMs
     ) {
+        if (isDeletedLocally) return
         val updated = note.copy(
             title = if (t.isBlank()) "Untitled Note" else t,
             body = b,
@@ -243,10 +244,18 @@ fun NoteEditorScreen(
                 saveStatus = saveStatus,
                 sharedWith = note.sharedWith,
                 onBack = {
-                    persist()
+                    if (!isDeletedLocally) {
+                        // Check if entirely blank
+                        if (title.isBlank() && body.isBlank() && checklist.isEmpty() && attachedImageUri.isNullOrBlank() && attachedAudioUri.isNullOrBlank()) {
+                            onDeleteNote?.invoke(note.id)
+                        } else {
+                            persist()
+                        }
+                    }
                     onBack()
                 },
                 onDelete = {
+                    isDeletedLocally = true
                     onDeleteNote?.invoke(note.id)
                 },
                 onShare = {
@@ -306,12 +315,12 @@ fun NoteEditorScreen(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Attached Image Section
+                // Attached Image / Sketch Section
                 if (!attachedImageUri.isNullOrBlank()) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(200.dp)
+                            .height(220.dp)
                             .clip(RoundedCornerShape(20.dp))
                     ) {
                         AsyncImage(
@@ -319,7 +328,7 @@ fun NoteEditorScreen(
                                 .data(attachedImageUri)
                                 .crossfade(true)
                                 .build(),
-                            contentDescription = "Attached photo",
+                            contentDescription = "Attached photo or sketch",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
@@ -338,7 +347,7 @@ fun NoteEditorScreen(
                         ) {
                             Icon(
                                 Icons.Outlined.Close,
-                                contentDescription = "Remove photo",
+                                contentDescription = "Remove attachment",
                                 tint = Color.White,
                                 modifier = Modifier.size(18.dp)
                             )
@@ -479,57 +488,6 @@ fun NoteEditorScreen(
                 )
 
                 Spacer(modifier = Modifier.height(20.dp))
-
-                // Optional Doodle Canvas Section
-                if (isDoodleActive) {
-                    Text(
-                        text = "Hand-Drawn Sketches:",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontFamily = OutfitFontFamily,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF141414)
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .border(1.5.dp, Color(0xFF2C2C2C), RoundedCornerShape(24.dp))
-                                .padding(horizontal = 18.dp, vertical = 8.dp)
-                        ) {
-                            Text(
-                                text = "Idea Diagram",
-                                style = TextStyle(
-                                    fontFamily = OutfitFontFamily,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = Color(0xFF141414)
-                                )
-                            )
-                        }
-
-                        Canvas(modifier = Modifier.size(54.dp, 36.dp)) {
-                            val heartPath = Path().apply {
-                                moveTo(size.width * 0.25f, size.height * 0.4f)
-                                cubicTo(size.width * 0.1f, size.height * 0.1f, size.width * 0.4f, size.height * 0.1f, size.width * 0.5f, size.height * 0.4f)
-                                cubicTo(size.width * 0.6f, size.height * 0.1f, size.width * 0.9f, size.height * 0.1f, size.width * 0.75f, size.height * 0.4f)
-                                lineTo(size.width * 0.5f, size.height * 0.8f)
-                                close()
-                            }
-                            drawPath(
-                                path = heartPath,
-                                color = Color(0xFF333333),
-                                style = Stroke(width = 1.5.dp.toPx())
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(20.dp))
-                }
 
                 // Checklist Section
                 if (checklist.isNotEmpty() || showNewChecklistField) {
@@ -687,7 +645,7 @@ fun NoteEditorScreen(
                 )
             }
 
-            // Primary Floating Editor Toolbar (+, Camera, Pen, Checklist, Mic)
+            // Primary Floating Editor Toolbar (+, Camera, Pen/Sketch, Checklist, Mic)
             FloatingEditorToolbar(
                 onAddContent = {
                     showNewChecklistField = true
@@ -698,10 +656,7 @@ fun NoteEditorScreen(
                     )
                 },
                 onDraw = {
-                    isDoodleActive = !isDoodleActive
-                    coroutineScope.launch {
-                        snackbarHostState.showSnackbar(if (isDoodleActive) "Sketch layer enabled" else "Sketch layer hidden")
-                    }
+                    isSketchModalOpen = true
                 },
                 onChecklist = {
                     showNewChecklistField = true
@@ -723,6 +678,20 @@ fun NoteEditorScreen(
                 },
                 onFormat = {
                     isTextSelectionActive = !isTextSelectionActive
+                }
+            )
+        }
+
+        // Interactive Sketch Modal
+        if (isSketchModalOpen) {
+            SketchPadModal(
+                onDismiss = { isSketchModalOpen = false },
+                onSaveSketch = { sketchPath ->
+                    attachedImageUri = sketchPath
+                    persist(img = sketchPath)
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Sketch attached to note!")
+                    }
                 }
             )
         }
@@ -792,7 +761,6 @@ fun NoteEditorScreen(
                                 onClick = {
                                     val dur = audioRecorder.stopRecording()
                                     isRecordingActive = false
-                                    // Attach audio to note
                                     val audioDir = File(context.filesDir, "voice_notes")
                                     val latestFile = audioDir.listFiles()?.maxByOrNull { it.lastModified() }
                                     if (latestFile != null) {
@@ -856,7 +824,6 @@ private fun EditorTopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Circle Back Button + Subtle Save Status Indicator
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -894,7 +861,6 @@ private fun EditorTopBar(
                 )
             }
 
-            // Subtle save state
             Text(
                 text = saveStatus.label,
                 style = TextStyle(
@@ -907,12 +873,10 @@ private fun EditorTopBar(
             )
         }
 
-        // Action Buttons: Delete (Move to Trash), Share, Favorite
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Delete / Move to Trash button
             val deleteInteraction = remember { MutableInteractionSource() }
             val isDeletePressed by deleteInteraction.collectIsPressedAsState()
             val deleteScale by animateFloatAsState(
@@ -946,7 +910,6 @@ private fun EditorTopBar(
                 )
             }
 
-            // Share icon
             Box(
                 modifier = Modifier
                     .size(38.dp)
@@ -966,7 +929,6 @@ private fun EditorTopBar(
                 )
             }
 
-            // Favorite toggle
             Box(
                 modifier = Modifier
                     .size(38.dp)
@@ -990,7 +952,6 @@ private fun EditorTopBar(
     }
 }
 
-// Floating Primary Editor Toolbar
 @Composable
 private fun FloatingEditorToolbar(
     onAddContent: () -> Unit,
@@ -1023,7 +984,6 @@ private fun FloatingEditorToolbar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // (+) Add Checklist item
         Box(
             modifier = Modifier
                 .scale(addScale)
@@ -1048,35 +1008,30 @@ private fun FloatingEditorToolbar(
             )
         }
 
-        // Camera / Image Attachment
         EditorToolIcon(
             icon = Icons.Outlined.Image,
             contentDescription = "Attach Photo",
             onClick = onCamera
         )
 
-        // Mic / Voice Note Recording
         EditorToolIcon(
             icon = Icons.Filled.Mic,
             contentDescription = "Record Voice Note",
             onClick = onMic
         )
 
-        // Pen / Drawing
         EditorToolIcon(
             icon = Icons.Outlined.Edit,
-            contentDescription = "Drawing",
+            contentDescription = "Draw Sketch",
             onClick = onDraw
         )
 
-        // Checklist
         EditorToolIcon(
             icon = Icons.Outlined.Checklist,
             contentDescription = "Checklist",
             onClick = onChecklist
         )
 
-        // Format toggle
         EditorToolIcon(
             icon = Icons.AutoMirrored.Outlined.FormatAlignLeft,
             contentDescription = "Format",
@@ -1125,7 +1080,6 @@ private fun EditorToolIcon(
     }
 }
 
-// Dark Keyboard / Formatting Accessory Bar
 @Composable
 private fun DarkFormattingAccessoryBar(
     selectedSize: Int,
@@ -1163,7 +1117,6 @@ private fun DarkFormattingAccessoryBar(
             modifier = Modifier.size(18.dp)
         )
 
-        // Font Sizes: 14, 16, 18
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             listOf(14, 16, 18).forEach { size ->
                 val isCurrent = size == selectedSize
