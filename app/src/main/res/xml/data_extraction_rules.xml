@@ -10,4 +10,5 @@
         <include domain="database" path="."/>
         <include domain="sharedpref" path="."/>
     </device-transfer>
+    </cloud-backup>
 </data-extraction-rules>
