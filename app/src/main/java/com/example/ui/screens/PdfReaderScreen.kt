@@ -64,6 +64,8 @@ import com.example.ui.theme.NoteYellow
 import com.example.ui.theme.OutfitFontFamily
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -76,6 +78,7 @@ fun PdfReaderScreen(
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
+    val renderMutex = remember { Mutex() }
     var pfd by remember { mutableStateOf<ParcelFileDescriptor?>(null) }
     var renderer by remember { mutableStateOf<PdfRenderer?>(null) }
     var totalPages by remember { mutableStateOf(document.pageCount) }
@@ -337,15 +340,17 @@ fun PdfReaderScreen(
                                 if (bitmap == null && currentRenderer != null) {
                                     withContext(Dispatchers.IO) {
                                         try {
-                                            val page = currentRenderer.openPage(pageIndex)
-                                            val targetWidth = 1080
-                                            val targetHeight = (targetWidth * (page.height.toFloat() / page.width.toFloat())).toInt()
-                                            val bmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-                                            bmp.eraseColor(android.graphics.Color.WHITE)
-                                            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                                            page.close()
-                                            pageBitmaps[pageIndex] = bmp
-                                            bitmap = bmp
+                                            renderMutex.withLock {
+                                                val page = currentRenderer.openPage(pageIndex)
+                                                val targetWidth = 1080
+                                                val targetHeight = (targetWidth * (page.height.toFloat() / page.width.toFloat())).toInt().coerceAtLeast(1)
+                                                val bmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+                                                bmp.eraseColor(android.graphics.Color.WHITE)
+                                                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                                page.close()
+                                                pageBitmaps[pageIndex] = bmp
+                                                bitmap = bmp
+                                            }
                                         } catch (_: Exception) { }
                                     }
                                 }

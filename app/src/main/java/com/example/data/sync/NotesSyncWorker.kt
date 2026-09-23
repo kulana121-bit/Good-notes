@@ -23,7 +23,16 @@ class NotesSyncWorker(
         return try {
             if (syncManager.isOnline()) {
                 val syncResult = syncManager.syncNow()
-                if (syncResult.isSuccess) Result.success() else Result.retry()
+                if (syncResult.isSuccess) {
+                    Result.success()
+                } else {
+                    val errorMsg = syncResult.exceptionOrNull()?.message ?: ""
+                    if (errorMsg.contains("Sign in", ignoreCase = true)) {
+                        Result.success()
+                    } else {
+                        Result.retry()
+                    }
+                }
             } else {
                 Result.retry()
             }
