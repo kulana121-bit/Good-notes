@@ -17,7 +17,6 @@ import com.example.data.repository.DocumentRepository
 import com.example.data.repository.NotesRepository
 import com.example.ui.theme.NoteLavender
 import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -196,9 +195,7 @@ class NotesComprehensiveCujTest {
 
     @Test
     fun testBackupPayloadSerialization() {
-        val moshi = Moshi.Builder()
-            .addLast(KotlinJsonAdapterFactory())
-            .build()
+        val moshi = Moshi.Builder().build()
         val adapter = moshi.adapter(NotesBackupDto::class.java)
 
         val payload = NotesBackupDto(

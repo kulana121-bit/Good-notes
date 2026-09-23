@@ -9,15 +9,12 @@ import com.example.data.model.Note
 import com.example.data.model.VisualCardType
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 object NoteMappers {
-    private val moshi: Moshi = Moshi.Builder()
-        .addLast(KotlinJsonAdapterFactory())
-        .build()
+    private val moshi: Moshi = Moshi.Builder().build()
 
     private val checklistType = Types.newParameterizedType(List::class.java, ChecklistItem::class.java)
     private val checklistAdapter = moshi.adapter<List<ChecklistItem>>(checklistType)

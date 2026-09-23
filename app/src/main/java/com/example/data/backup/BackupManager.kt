@@ -9,7 +9,6 @@ import com.example.data.local.entity.NoteEntity
 import com.example.data.local.entity.SettingEntity
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
@@ -42,9 +41,7 @@ data class RestoreResultSummary(
 
 class BackupManager(private val database: NotesDatabase) {
 
-    private val moshi = Moshi.Builder()
-        .addLast(KotlinJsonAdapterFactory())
-        .build()
+    private val moshi = Moshi.Builder().build()
 
     private val adapter = moshi.adapter(NotesBackupDto::class.java)
 
