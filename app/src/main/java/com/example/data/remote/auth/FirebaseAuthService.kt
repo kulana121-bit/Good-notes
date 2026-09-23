@@ -10,6 +10,7 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.UserProfileChangeRequest
@@ -35,15 +36,32 @@ class FirebaseAuthService(private val context: Context) {
 
     private val tag = "FirebaseAuthService"
 
-    private val isFirebaseInitialized: Boolean
-        get() = try {
+    private fun ensureFirebaseInitialized(): Boolean {
+        return try {
+            if (FirebaseApp.getApps(context).isEmpty()) {
+                try {
+                    FirebaseApp.initializeApp(context)
+                } catch (_: Exception) { }
+
+                if (FirebaseApp.getApps(context).isEmpty()) {
+                    val options = FirebaseOptions.Builder()
+                        .setApplicationId("1:798861272443:android:34eb069c059c2fd10909de")
+                        .setProjectId("gen-lang-client-0491842307")
+                        .setApiKey("AIzaSyCKVqmHlYgD8oHil8_xPIvVQVtLreWIIT4")
+                        .setStorageBucket("gen-lang-client-0491842307.firebasestorage.app")
+                        .build()
+                    FirebaseApp.initializeApp(context, options)
+                }
+            }
             FirebaseApp.getApps(context).isNotEmpty()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to initialize Firebase", e)
             false
         }
+    }
 
     private val auth: FirebaseAuth?
-        get() = if (isFirebaseInitialized) FirebaseAuth.getInstance() else null
+        get() = if (ensureFirebaseInitialized()) FirebaseAuth.getInstance() else null
 
     private val credentialManager: CredentialManager = CredentialManager.create(context)
 
@@ -51,6 +69,7 @@ class FirebaseAuthService(private val context: Context) {
     val currentUser: StateFlow<UserSummary?> = _currentUser.asStateFlow()
 
     init {
+        ensureFirebaseInitialized()
         auth?.currentUser?.let { user ->
             _currentUser.value = UserSummary(
                 uid = user.uid,
@@ -90,7 +109,7 @@ class FirebaseAuthService(private val context: Context) {
 
     suspend fun signInWithGoogle(webClientId: String? = null): Result<UserSummary> = withContext(Dispatchers.IO) {
         val authInstance = auth ?: return@withContext Result.failure(
-            Exception("Firebase is not configured. Add google-services.json to connect cloud authentication.")
+            Exception("Firebase Authentication could not be connected. Please ensure internet access.")
         )
 
         try {

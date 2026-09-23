@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.NoteAdd
+import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -94,9 +95,11 @@ import java.io.File
 @Composable
 fun HomeScreen(
     notes: List<Note>,
+    documents: List<Document> = emptyList(),
     activeFilter: NotesFilter,
     onFilterSelected: (NotesFilter) -> Unit,
     onNoteClick: (Note) -> Unit,
+    onDocumentClick: (Document) -> Unit = {},
     onToggleFavorite: (String) -> Unit,
     onToggleChecklistItem: (String, String) -> Unit,
     onDeleteNote: (String) -> Unit,
@@ -236,7 +239,7 @@ fun HomeScreen(
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Icon(
-                                                imageVector = androidx.compose.material.icons.Icons.Outlined.PictureAsPdf,
+                                                imageVector = Icons.Outlined.PictureAsPdf,
                                                 contentDescription = "PDF",
                                                 tint = Color(0xFF141414),
                                                 modifier = Modifier.size(24.dp)

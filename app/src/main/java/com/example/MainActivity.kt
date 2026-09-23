@@ -161,9 +161,11 @@ fun NotesApp(
                     NavDestination.HOME, NavDestination.ALL_NOTES -> {
                         HomeScreen(
                             notes = notes,
+                            documents = documents,
                             activeFilter = if (destination == NavDestination.ALL_NOTES) NotesFilter.ALL else activeFilter,
                             onFilterSelected = { viewModel.selectFilter(it) },
                             onNoteClick = { viewModel.openNoteEditor(it) },
+                            onDocumentClick = { doc -> viewModel.openDocument(doc) },
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onToggleChecklistItem = { noteId, itemId ->
                                 viewModel.toggleChecklistItem(noteId, itemId)

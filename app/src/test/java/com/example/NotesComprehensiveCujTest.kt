@@ -57,13 +57,13 @@ class NotesComprehensiveCujTest {
     fun testInitialSeedOccursOnlyOnce() = runBlocking {
         // First initialization
         notesRepository.seedInitialDataIfNeeded()
-        val initialCount = notesRepository.activeNotesCount.first()
-        assertTrue("Expected seeded notes to be > 0", initialCount > 0)
+        val initialFolderCount = notesRepository.folders.first().size
+        assertTrue("Expected seeded folders to be > 0", initialFolderCount > 0)
 
         // Second initialization call must be idempotent
         notesRepository.seedInitialDataIfNeeded()
-        val secondCount = notesRepository.activeNotesCount.first()
-        assertEquals(initialCount, secondCount)
+        val secondFolderCount = notesRepository.folders.first().size
+        assertEquals(initialFolderCount, secondFolderCount)
     }
 
     @Test
@@ -207,13 +207,12 @@ class NotesComprehensiveCujTest {
                     id = "b_note_1",
                     title = "Backup Note",
                     content = "Restorable content",
+                    cardType = "CREAM_LECTURE",
                     folder = "Study",
                     isFavorite = true,
                     isDeleted = false,
                     createdAt = 1000L,
                     updatedAt = 2000L,
-                    color = "BLUE_NOTE",
-                    noteType = "TEXT",
                     isTodo = false,
                     isImportant = true,
                     checklistJson = "[]",

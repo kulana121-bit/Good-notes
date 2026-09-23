@@ -36,7 +36,8 @@ class FirebaseStorageService(private val context: Context) {
         }
 
         try {
-            val storagePath = "users/$uid/documents/$documentId/${file.name}"
+            val safeName = file.name.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
+            val storagePath = "users/$uid/documents/$documentId/$safeName"
             val ref = storageInstance.reference.child(storagePath)
 
             val fileUri = Uri.fromFile(file)
@@ -45,6 +46,27 @@ class FirebaseStorageService(private val context: Context) {
             Result.success(storagePath)
         } catch (e: Exception) {
             Log.e(tag, "Failed to upload document file ${file.name}", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun uploadPdfUri(
+        uid: String,
+        documentId: String,
+        uri: Uri,
+        displayName: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val storageInstance = storage ?: return@withContext Result.failure(Exception("Firebase Storage is not initialized"))
+
+        try {
+            val safeName = displayName.replace("[^a-zA-Z0-9._-]".toRegex(), "_").ifBlank { "document" }
+            val storagePath = "users/$uid/documents/$documentId/$safeName.pdf"
+            val ref = storageInstance.reference.child(storagePath)
+
+            ref.putFile(uri).await()
+            Result.success(storagePath)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to upload document URI $uri", e)
             Result.failure(e)
         }
     }
