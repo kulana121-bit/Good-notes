@@ -72,7 +72,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.data.model.Document
 import com.example.data.model.Note
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import com.example.ui.components.EmptyState
 import com.example.ui.components.FilterPillRow
 import com.example.ui.components.FloatingActionCapsule
@@ -193,6 +196,75 @@ fun HomeScreen(
                     totalNotesCount = notes.size
                 )
                 Spacer(modifier = Modifier.height(14.dp))
+            }
+
+            // Recent Documents
+            if (documents.isNotEmpty() && activeFilter == NotesFilter.ALL) {
+                item {
+                    Column {
+                        Text(
+                            text = "Recent PDFs",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontFamily = OutfitFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            ),
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                        )
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(documents.take(5), key = { it.id }) { doc ->
+                                Box(
+                                    modifier = Modifier
+                                        .width(160.dp)
+                                        .shadow(2.dp, RoundedCornerShape(16.dp))
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(doc.accentColor.copy(alpha = 0.3f))
+                                        .clickable { onDocumentClick(doc) }
+                                        .padding(16.dp)
+                                ) {
+                                    Column(
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(doc.accentColor),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = androidx.compose.material.icons.Icons.Outlined.PictureAsPdf,
+                                                contentDescription = "PDF",
+                                                tint = Color(0xFF141414),
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                        Text(
+                                            text = doc.displayName,
+                                            style = MaterialTheme.typography.titleSmall.copy(
+                                                fontFamily = OutfitFontFamily,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            ),
+                                            maxLines = 2
+                                        )
+                                        Text(
+                                            text = "${doc.pageCount} ${if (doc.pageCount == 1) "page" else "pages"} • ${doc.lastOpenedAtFormatted}",
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFamily = OutfitFontFamily,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(24.dp))
+                    }
+                }
             }
 
             // Bento / Masonry Note Cards
