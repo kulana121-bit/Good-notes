@@ -101,6 +101,7 @@ class BackupManager(private val database: NotesDatabase) {
 
             var jsonContent: String? = null
             val docsDir = File(context.filesDir, "documents").apply { mkdirs() }
+            val docsDirCanonicalPath = docsDir.canonicalPath + File.separator
             val extractedFiles = mutableMapOf<String, String>() // original filename -> localPath
 
             ZipInputStream(BufferedInputStream(inputStream)).use { zipIn ->
@@ -114,6 +115,11 @@ class BackupManager(private val database: NotesDatabase) {
                     } else if (entryName.startsWith("documents/") && !entry.isDirectory) {
                         val fileName = entryName.substringAfter("documents/")
                         val targetFile = File(docsDir, fileName)
+
+                        if (!targetFile.canonicalPath.startsWith(docsDirCanonicalPath)) {
+                            throw SecurityException("Zip Slip vulnerability detected: Invalid file path $entryName")
+                        }
+
                         FileOutputStream(targetFile).use { out ->
                             zipIn.copyTo(out)
                         }
