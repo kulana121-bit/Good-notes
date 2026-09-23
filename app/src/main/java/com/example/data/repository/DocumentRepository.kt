@@ -306,7 +306,30 @@ class DocumentRepository(private val documentDao: DocumentDao) {
                 } else {
                     val file = File(doc.localPath)
                     if (file.exists()) {
-                        file.delete()
+                        val deleted = file.delete()
+                        if (deleted && context != null) {
+                            try {
+                                val uri = MediaStore.Files.getContentUri("external")
+                                context.contentResolver.delete(
+                                    uri,
+                                    "${MediaStore.MediaColumns.DATA} = ?",
+                                    arrayOf(doc.localPath)
+                                )
+                            } catch (e: Exception) {
+                                Log.w(tag, "Failed to delete from MediaStore: ${e.message}")
+                            }
+                        }
+                    } else if (context != null) {
+                        try {
+                            val uri = MediaStore.Files.getContentUri("external")
+                            context.contentResolver.delete(
+                                uri,
+                                "${MediaStore.MediaColumns.DATA} = ?",
+                                arrayOf(doc.localPath)
+                            )
+                        } catch (e: Exception) {
+                            Log.w(tag, "Failed to delete from MediaStore: ${e.message}")
+                        }
                     }
                 }
             } catch (e: Exception) {
