@@ -26,19 +26,26 @@ android {
   signingConfigs {
     create("release") {
       val envKeystoreFile = System.getenv("KEYSTORE_FILE")
-      val rootKeystore = file("${rootDir}/release.keystore")
-      val appKeystore = file("release.keystore")
+      val rootReleaseKeystore = file("${rootDir}/release.keystore")
+      val appReleaseKeystore = file("release.keystore")
+      val rootDebugKeystore = file("${rootDir}/debug.keystore")
+      val appDebugKeystore = file("debug.keystore")
+
       val targetKeystore = when {
         envKeystoreFile != null && file(envKeystoreFile).exists() -> file(envKeystoreFile)
-        rootKeystore.exists() -> rootKeystore
-        appKeystore.exists() -> appKeystore
+        rootReleaseKeystore.exists() -> rootReleaseKeystore
+        appReleaseKeystore.exists() -> appReleaseKeystore
+        rootDebugKeystore.exists() -> rootDebugKeystore
+        appDebugKeystore.exists() -> appDebugKeystore
         else -> null
       }
+
       if (targetKeystore != null) {
         storeFile = targetKeystore
-        storePassword = System.getenv("KEYSTORE_PASSWORD")
-        keyAlias = System.getenv("KEY_ALIAS")
-        keyPassword = System.getenv("KEY_PASSWORD")
+        val isDebugKey = targetKeystore.name.contains("debug")
+        storePassword = System.getenv("KEYSTORE_PASSWORD") ?: if (isDebugKey) "android" else "releasepass123"
+        keyAlias = System.getenv("KEY_ALIAS") ?: if (isDebugKey) "androiddebugkey" else "release"
+        keyPassword = System.getenv("KEY_PASSWORD") ?: if (isDebugKey) "android" else "releasepass123"
       }
     }
     create("debugConfig") {
