@@ -44,6 +44,12 @@ class AudioPlayerManager(private val context: Context) {
         stop()
         try {
             val player = MediaPlayer()
+            player.setOnErrorListener { _, what, extra ->
+                Log.w("AudioPlayerManager", "MediaPlayer error: what=$what, extra=$extra")
+                stop()
+                true
+            }
+
             val file = File(audioUriString)
             if (file.exists()) {
                 player.setDataSource(file.absolutePath)
@@ -60,7 +66,7 @@ class AudioPlayerManager(private val context: Context) {
             player.start()
             mediaPlayer = player
             currentPlayingUri = audioUriString
-            _durationMs.value = player.duration
+            _durationMs.value = try { player.duration } catch (_: Exception) { 0 }
             _isPlaying.value = true
             startProgressTracking()
         } catch (e: Exception) {
@@ -70,44 +76,58 @@ class AudioPlayerManager(private val context: Context) {
     }
 
     fun pause() {
-        mediaPlayer?.let {
-            if (it.isPlaying) {
-                it.pause()
+        try {
+            if (_isPlaying.value) {
+                mediaPlayer?.pause()
                 _isPlaying.value = false
                 progressJob?.cancel()
             }
+        } catch (e: Exception) {
+            Log.w("AudioPlayerManager", "Error pausing MediaPlayer", e)
         }
     }
 
     fun resume() {
-        mediaPlayer?.let {
-            it.start()
-            _isPlaying.value = true
-            startProgressTracking()
+        try {
+            mediaPlayer?.let {
+                it.start()
+                _isPlaying.value = true
+                startProgressTracking()
+            }
+        } catch (e: Exception) {
+            Log.w("AudioPlayerManager", "Error resuming MediaPlayer", e)
         }
     }
 
     fun seekTo(positionMs: Int) {
-        mediaPlayer?.let {
-            it.seekTo(positionMs)
-            _currentPositionMs.value = positionMs
+        try {
+            mediaPlayer?.let {
+                it.seekTo(positionMs)
+                _currentPositionMs.value = positionMs
+            }
+        } catch (e: Exception) {
+            Log.w("AudioPlayerManager", "Error seeking MediaPlayer", e)
         }
     }
 
     fun stop() {
         progressJob?.cancel()
         progressJob = null
+        val player = mediaPlayer
+        mediaPlayer = null
+        currentPlayingUri = null
+        _isPlaying.value = false
+        _currentPositionMs.value = 0
         try {
-            mediaPlayer?.apply {
-                if (isPlaying) stop()
-                release()
+            player?.apply {
+                try {
+                    reset()
+                } catch (_: Exception) {}
+                try {
+                    release()
+                } catch (_: Exception) {}
             }
         } catch (_: Exception) {
-        } finally {
-            mediaPlayer = null
-            currentPlayingUri = null
-            _isPlaying.value = false
-            _currentPositionMs.value = 0
         }
     }
 
@@ -116,9 +136,11 @@ class AudioPlayerManager(private val context: Context) {
         progressJob = scope.launch {
             while (isActive && _isPlaying.value) {
                 mediaPlayer?.let {
-                    if (it.isPlaying) {
-                        _currentPositionMs.value = it.currentPosition
-                    }
+                    try {
+                        if (_isPlaying.value) {
+                            _currentPositionMs.value = it.currentPosition
+                        }
+                    } catch (_: Exception) {}
                 }
                 delay(100)
             }
