@@ -6,7 +6,6 @@
         <include domain="sharedpref" path="."/>
 
         <!-- Exclude auth tokens, temp files, and caches -->
-        <exclude domain="root" path="cache" />
         <exclude domain="file" path="cache" />
         <exclude domain="file" path="temp" />
         <exclude domain="sharedpref" path="com.google.android.gms.auth.api.signin.xml" />
@@ -17,7 +16,6 @@
         <include domain="file" path="."/>
         <include domain="database" path="."/>
         <include domain="sharedpref" path="."/>
-        <exclude domain="root" path="cache" />
         <exclude domain="file" path="cache" />
         <exclude domain="file" path="temp" />
     </device-transfer>
