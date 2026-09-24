@@ -11,7 +11,11 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Scope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -65,6 +69,11 @@ class GoogleDriveAuthManager(private val context: Context) {
      * Gets the Intent to launch Google Drive OAuth consent flow, associating with preferredEmail if available.
      */
     fun getAuthorizationIntent(preferredEmail: String? = null): Intent {
+        // Check Play Services availability
+        val playServicesAvailability = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context)
+        if (playServicesAvailability != ConnectionResult.SUCCESS) {
+            Log.w(tag, "Google Play Services is not fully available ($playServicesAvailability) before launching Drive Auth")
+        }
         return getClient(preferredEmail).signInIntent
     }
 
@@ -72,33 +81,74 @@ class GoogleDriveAuthManager(private val context: Context) {
      * Handles the result of the Google Drive authorization Intent.
      */
     fun handleAuthorizationResult(data: Intent?): Result<DriveAuthState.Connected> {
+        if (data == null) {
+            return Result.failure(Exception("Google Drive authorization was cancelled (no result returned)."))
+        }
+
         return try {
             val task = GoogleSignIn.getSignedInAccountFromIntent(data)
             val account = task.getResult(ApiException::class.java)
 
             if (account != null && GoogleSignIn.hasPermissions(account, SCOPE_DRIVE_FILE)) {
-                Log.i(tag, "Google Drive authorization granted for user account")
+                Log.i(tag, "Google Drive authorization granted for user account: ${account.email}")
                 Result.success(
                     DriveAuthState.Connected(
                         accountEmail = account.email ?: "Authorized Account",
                         accountName = account.displayName
                     )
                 )
+            } else if (account != null) {
+                Log.w(tag, "Google Drive scope permission was not granted by user")
+                Result.failure(Exception("Google Drive permission was not granted. Please allow Drive file access to store backups and documents."))
             } else {
-                Log.w(tag, "Google Drive permission was not granted by user")
-                Result.failure(Exception("Google Drive permission was not granted. Please allow access to store your notes and documents."))
+                Result.failure(Exception("Could not retrieve account details from Google Drive sign-in."))
             }
         } catch (e: ApiException) {
             val statusCode = e.statusCode
-            Log.w(tag, "Google Drive authorization failed with status: $statusCode")
+            val statusMessage = CommonStatusCodes.getStatusCodeString(statusCode)
+            Log.w(tag, "Google Drive authorization failed with status: $statusCode ($statusMessage)")
+
             val userMessage = when (statusCode) {
-                12501 -> "Google Drive authorization was cancelled."
-                7 -> "Network error during authorization. Please check internet connection."
-                else -> "Authorization failed (${e.localizedMessage ?: "Code $statusCode"})."
+                CommonStatusCodes.DEVELOPER_ERROR -> {
+                    // Status Code 10
+                    "Google Drive OAuth error (Status 10: DEVELOPER_ERROR). The APK signing certificate SHA-1 fingerprint is not registered in Google Cloud Console / Firebase for package ${context.packageName}, or the Google Drive API is not enabled in Google Cloud Console."
+                }
+                12501, CommonStatusCodes.CANCELED -> {
+                    // GoogleSignInStatusCodes.SIGN_IN_CANCELLED (12501)
+                    "Google Drive authorization was cancelled by the user."
+                }
+                12502 -> {
+                    // GoogleSignInStatusCodes.SIGN_IN_CURRENTLY_IN_PROGRESS
+                    "Google Drive authorization is already in progress. Please wait a moment."
+                }
+                12500 -> {
+                    // GoogleSignInStatusCodes.SIGN_IN_FAILED
+                    "Google Sign-In failed (Code 12500). Please ensure Google Play Services is active and up to date."
+                }
+                CommonStatusCodes.NETWORK_ERROR -> {
+                    // Status Code 7
+                    "Network error during Google Drive authorization. Please verify internet connection."
+                }
+                CommonStatusCodes.INVALID_ACCOUNT -> {
+                    // Status Code 5
+                    "The selected Google Account is invalid. Please try selecting a different account."
+                }
+                CommonStatusCodes.SIGN_IN_REQUIRED -> {
+                    // Status Code 4
+                    "Google account sign-in is required before authorizing Drive access."
+                }
+                CommonStatusCodes.INTERNAL_ERROR -> {
+                    // Status Code 8
+                    "Google Play Services internal error (Code 8). Please restart the app and try again."
+                }
+                else -> {
+                    val rawMsg = e.localizedMessage?.takeIf { it.isNotBlank() && it != "$statusCode:" }
+                    "Google Drive authorization failed (Code $statusCode${if (rawMsg != null) ": $rawMsg" else ""})."
+                }
             }
             Result.failure(Exception(userMessage))
         } catch (e: Exception) {
-            Log.e(tag, "Unexpected error handling authorization result: ${e.javaClass.simpleName}")
+            Log.e(tag, "Unexpected error handling authorization result: ${e.javaClass.simpleName} - ${e.message}")
             Result.failure(e)
         }
     }
@@ -112,11 +162,11 @@ class GoogleDriveAuthManager(private val context: Context) {
             ?: return@withContext Result.failure(Exception("Google Drive is not connected. Please connect Google Drive in Settings."))
 
         if (!GoogleSignIn.hasPermissions(account, SCOPE_DRIVE_FILE)) {
-            return@withContext Result.failure(Exception("Google Drive permission missing. Please reconnect Google Drive."))
+            return@withContext Result.failure(Exception("Google Drive permission missing or revoked. Please reconnect Google Drive in Settings."))
         }
 
         val androidAccount: Account = account.account
-            ?: return@withContext Result.failure(Exception("Google account identity could not be retrieved."))
+            ?: return@withContext Result.failure(Exception("Google account identity could not be retrieved from signed-in session."))
 
         try {
             val scopeString = "oauth2:$DRIVE_FILE_SCOPE"
@@ -126,13 +176,13 @@ class GoogleDriveAuthManager(private val context: Context) {
             Log.w(tag, "UserRecoverableAuthException encountered during token acquisition")
             Result.failure(e)
         } catch (e: GoogleAuthException) {
-            Log.e(tag, "GoogleAuthException during token acquisition: ${e.javaClass.simpleName}")
-            Result.failure(Exception("Google Drive authorization error. Please reconnect in Settings."))
+            Log.e(tag, "GoogleAuthException during token acquisition: ${e.javaClass.simpleName} - ${e.message}")
+            Result.failure(Exception("Google Drive authorization expired or invalid (${e.message}). Please reconnect in Settings."))
         } catch (e: IOException) {
-            Log.e(tag, "Network IOException during Drive token acquisition")
-            Result.failure(Exception("Network unavailable. Please check your internet connection."))
+            Log.e(tag, "Network IOException during Drive token acquisition: ${e.message}")
+            Result.failure(Exception("Network unavailable while contacting Google Drive. Please check your internet connection."))
         } catch (e: Exception) {
-            Log.e(tag, "Unexpected error getting Drive token: ${e.javaClass.simpleName}")
+            Log.e(tag, "Unexpected error getting Drive token: ${e.javaClass.simpleName} - ${e.message}")
             Result.failure(e)
         }
     }

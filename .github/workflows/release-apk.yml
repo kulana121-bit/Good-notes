@@ -59,29 +59,42 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
 
-      - name: Create temporary release keystore
+      - name: Configure release signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "=== Generating temporary release keystore ==="
-          keytool -genkey -v \
-            -keystore ./release.keystore \
-            -alias release-key \
-            -storepass release123 \
-            -keypass release123 \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Release Signing,O=Android,C=US"
-
-          if [ ! -f "./release.keystore" ]; then
-            echo "ERROR: Failed to create ./release.keystore."
+          echo "=== Configuring Release Signing Keystore ==="
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Using custom release keystore from GitHub Secrets (KEYSTORE_BASE64)..."
+            echo "$KEYSTORE_BASE64" | base64 -d > ./release.keystore
+            echo "KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}" >> $GITHUB_ENV
+            echo "KEY_ALIAS=${KEY_ALIAS}" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=${KEY_PASSWORD}" >> $GITHUB_ENV
+          elif [ -f "./debug.keystore.base64" ]; then
+            echo "Restoring stable repository keystore from ./debug.keystore.base64 for release signing fallback..."
+            base64 -d ./debug.keystore.base64 > ./release.keystore
+            echo "KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
+            echo "KEY_ALIAS=androiddebugkey" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
+          else
+            echo "ERROR: No release keystore provided in GitHub Secrets and no debug.keystore.base64 fallback found."
             exit 1
           fi
+
+          if [ ! -f "./release.keystore" ]; then
+            echo "ERROR: Keystore file ./release.keystore does not exist."
+            exit 1
+          fi
+
           cp ./release.keystore ./app/release.keystore
-          echo "release.keystore created successfully."
           echo "KEYSTORE_FILE=$(pwd)/release.keystore" >> $GITHUB_ENV
-          echo "KEYSTORE_PASSWORD=release123" >> $GITHUB_ENV
-          echo "KEY_ALIAS=release-key" >> $GITHUB_ENV
-          echo "KEY_PASSWORD=release123" >> $GITHUB_ENV
+
+          echo "=== Printing Release Signing Certificate Fingerprints ==="
+          REL_PASS="${KEYSTORE_PASSWORD:-android}"
+          keytool -list -v -keystore ./release.keystore -storepass "$REL_PASS" | grep -E "(SHA1|SHA256|Alias name):" || true
 
       - name: Build release APK
         run: ./gradlew :app:assembleRelease --stacktrace --no-daemon

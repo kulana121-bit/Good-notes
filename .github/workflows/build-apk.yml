@@ -59,29 +59,46 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
 
-      - name: Create temporary debug keystore
+      - name: Configure signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "=== Checking debug keystore ==="
-          if [ -f "./debug.keystore" ]; then
-            echo "debug.keystore already exists."
+          echo "=== Configuring Debug Keystore ==="
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Using custom keystore from GitHub Secrets (KEYSTORE_BASE64)..."
+            echo "$KEYSTORE_BASE64" | base64 -d > ./debug.keystore
+            echo "KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD:-android}" >> $GITHUB_ENV
+            echo "KEY_ALIAS=${KEY_ALIAS:-androiddebugkey}" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=${KEY_PASSWORD:-android}" >> $GITHUB_ENV
+          elif [ -f "./debug.keystore.base64" ]; then
+            echo "Restoring stable repository keystore from ./debug.keystore.base64..."
+            base64 -d ./debug.keystore.base64 > ./debug.keystore
+            echo "KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
+            echo "KEY_ALIAS=androiddebugkey" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
+          elif [ -f "./debug.keystore" ]; then
+            echo "Using existing ./debug.keystore..."
+            echo "KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
+            echo "KEY_ALIAS=androiddebugkey" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
           else
-            echo "debug.keystore not found. Generating temporary debug keystore..."
-            keytool -genkey -v \
-              -keystore ./debug.keystore \
-              -alias androiddebugkey \
-              -storepass android \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
-          
-          if [ ! -f "./debug.keystore" ]; then
-            echo "ERROR: Failed to create or find ./debug.keystore."
+            echo "ERROR: No stable keystore found (neither KEYSTORE_BASE64 secret nor debug.keystore.base64)."
             exit 1
           fi
-          echo "debug.keystore is confirmed present."
+
+          if [ ! -f "./debug.keystore" ]; then
+            echo "ERROR: Keystore file ./debug.keystore does not exist."
+            exit 1
+          fi
+
+          echo "KEYSTORE_FILE=$(pwd)/debug.keystore" >> $GITHUB_ENV
+
+          echo "=== Printing Signing Certificate Fingerprints ==="
+          KEY_STORE_PASS="${KEYSTORE_PASSWORD:-android}"
+          keytool -list -v -keystore ./debug.keystore -storepass "$KEY_STORE_PASS" | grep -E "(SHA1|SHA256|Alias name):" || true
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --stacktrace --no-daemon

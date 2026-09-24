@@ -10,8 +10,16 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.GetCredentialResponse
 import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialCustomException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -20,6 +28,7 @@ import com.google.firebase.FirebaseException
 import com.google.firebase.FirebaseNetworkException
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.auth.GoogleAuthProvider
@@ -46,18 +55,25 @@ class FirebaseAuthService(private val context: Context) {
 
     private val tag = "FirebaseAuthService"
 
+    @Volatile
+    private var lastInitError: Throwable? = null
+
     private fun ensureFirebaseInitialized(): Boolean {
         return try {
             if (FirebaseApp.getApps(context).isEmpty()) {
                 try {
                     FirebaseApp.initializeApp(context)
+                    lastInitError = null
                 } catch (t: Throwable) {
+                    lastInitError = t
                     Log.w(tag, "Standard Firebase initialization attempt: ${t.message}")
                     val options = try { FirebaseOptions.fromResource(context) } catch (_: Throwable) { null }
                     if (options != null) {
                         try {
                             FirebaseApp.initializeApp(context, options)
+                            lastInitError = null
                         } catch (optErr: Throwable) {
+                            lastInitError = optErr
                             Log.w(tag, "Firebase init with options: ${optErr.message}")
                         }
                     }
@@ -65,6 +81,7 @@ class FirebaseAuthService(private val context: Context) {
             }
             FirebaseApp.getApps(context).isNotEmpty()
         } catch (t: Throwable) {
+            lastInitError = t
             Log.w(tag, "Failed to initialize Firebase: ${t.message}")
             false
         }
@@ -75,6 +92,7 @@ class FirebaseAuthService(private val context: Context) {
             try {
                 FirebaseAuth.getInstance()
             } catch (t: Throwable) {
+                lastInitError = t
                 Log.w(tag, "FirebaseAuth.getInstance failed: ${t.message}")
                 null
             }
@@ -186,10 +204,29 @@ class FirebaseAuthService(private val context: Context) {
         return "798861272443-ktn9f4aa93habcpm3464ms28ickvplrd.apps.googleusercontent.com"
     }
 
+    /**
+     * Attempts Google Sign-In using Credential Manager and exchanges the ID token with Firebase Auth.
+     */
     suspend fun signInWithGoogle(activityContext: Context? = null, webClientId: String? = null): Result<UserSummary> = withContext(Dispatchers.IO) {
         val authInstance = auth ?: return@withContext Result.failure(
-            Exception("Firebase Authentication could not be connected. Please verify internet access.")
+            Exception(
+                "Firebase Authentication is unavailable: ${lastInitError?.localizedMessage ?: "FirebaseApp not initialized. Verify google-services.json configuration."}"
+            )
         )
+
+        // Check Google Play Services status
+        val playServicesAvailability = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context)
+        if (playServicesAvailability != ConnectionResult.SUCCESS) {
+            Log.w(tag, "Google Play Services is not available: $playServicesAvailability")
+            if (playServicesAvailability == ConnectionResult.SERVICE_MISSING ||
+                playServicesAvailability == ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED ||
+                playServicesAvailability == ConnectionResult.SERVICE_DISABLED
+            ) {
+                return@withContext Result.failure(
+                    Exception("Google Play Services is not available or needs updating on this device (Code $playServicesAvailability).")
+                )
+            }
+        }
 
         // Resolve Activity Context for Credential Manager UI display
         val launchContext = resolveActivity(activityContext)
@@ -197,70 +234,99 @@ class FirebaseAuthService(private val context: Context) {
             ?: activityContext
             ?: context
 
-        val activeCredentialManager = CredentialManager.create(launchContext)
         val resolvedClientId = resolveWebClientId(webClientId)
+        Log.d(tag, "Initiating Google Sign-In with resolved client ID")
 
-        Log.d(tag, "Initiating Google Sign-In with serverClientId resolved")
+        var idToken: String? = null
 
-        val credentialResponse: GetCredentialResponse = try {
-            // Step 1: Attempt authorized accounts first with auto-select enabled
-            val authorizedOption = GetGoogleIdOption.Builder()
-                .setServerClientId(resolvedClientId)
-                .setFilterByAuthorizedAccounts(true)
-                .setAutoSelectEnabled(true)
-                .build()
+        // Step 1: Try Credential Manager
+        try {
+            val activeCredentialManager = CredentialManager.create(launchContext)
 
-            val authorizedRequest = GetCredentialRequest.Builder()
-                .addCredentialOption(authorizedOption)
-                .build()
-
-            activeCredentialManager.getCredential(context = launchContext, request = authorizedRequest)
-        } catch (e: GetCredentialCancellationException) {
-            Log.i(tag, "Google Sign-In cancelled by user")
-            return@withContext Result.failure(e)
-        } catch (e: Exception) {
-            // Step 2: Fallback when no authorized accounts exist - present full Google account chooser
-            Log.d(tag, "Authorized account retrieval not matched (${e.javaClass.simpleName}), requesting account selection")
-            try {
-                val allAccountsOption = GetGoogleIdOption.Builder()
+            // Step 1a: Try authorized accounts with auto-select
+            val credentialResponse: GetCredentialResponse = try {
+                val authorizedOption = GetGoogleIdOption.Builder()
                     .setServerClientId(resolvedClientId)
-                    .setFilterByAuthorizedAccounts(false)
-                    .setAutoSelectEnabled(false)
+                    .setFilterByAuthorizedAccounts(true)
+                    .setAutoSelectEnabled(true)
                     .build()
 
-                val fallbackRequest = GetCredentialRequest.Builder()
-                    .addCredentialOption(allAccountsOption)
+                val authorizedRequest = GetCredentialRequest.Builder()
+                    .addCredentialOption(authorizedOption)
                     .build()
 
-                activeCredentialManager.getCredential(context = launchContext, request = fallbackRequest)
-            } catch (cancelEx: GetCredentialCancellationException) {
-                Log.i(tag, "Google Sign-In account selection cancelled by user")
-                return@withContext Result.failure(cancelEx)
-            } catch (fallbackEx: Exception) {
-                Log.e(tag, "Google account selection error: ${fallbackEx.javaClass.simpleName} - ${fallbackEx.message}")
-                return@withContext Result.failure(fallbackEx)
+                activeCredentialManager.getCredential(context = launchContext, request = authorizedRequest)
+            } catch (e: GetCredentialCancellationException) {
+                Log.i(tag, "Google Sign-In cancelled by user")
+                return@withContext Result.failure(e)
+            } catch (e: Exception) {
+                // Step 1b: Fallback to all Google accounts selector
+                Log.d(tag, "Authorized account match not found (${e.javaClass.simpleName}), requesting account chooser")
+                try {
+                    val allAccountsOption = GetGoogleIdOption.Builder()
+                        .setServerClientId(resolvedClientId)
+                        .setFilterByAuthorizedAccounts(false)
+                        .setAutoSelectEnabled(false)
+                        .build()
+
+                    val fallbackRequest = GetCredentialRequest.Builder()
+                        .addCredentialOption(allAccountsOption)
+                        .build()
+
+                    activeCredentialManager.getCredential(context = launchContext, request = fallbackRequest)
+                } catch (cancelEx: GetCredentialCancellationException) {
+                    Log.i(tag, "Google Sign-In account selection cancelled by user")
+                    return@withContext Result.failure(cancelEx)
+                } catch (fallbackEx: Exception) {
+                    val msg = fallbackEx.message ?: ""
+                    Log.w(tag, "Credential Manager request failed: ${fallbackEx.javaClass.simpleName} - $msg")
+
+                    if (msg.contains("DEVELOPER_ERROR", ignoreCase = true) || msg.contains("10:") || msg.contains("code: 10")) {
+                        return@withContext Result.failure(
+                            Exception("Google Sign-In configuration error (DEVELOPER_ERROR / Code 10). The APK signing SHA-1 certificate is not registered in Firebase/Google Cloud Console for package ${context.packageName}.")
+                        )
+                    }
+                    throw fallbackEx
+                }
             }
-        }
 
-        // Step 3: Extract Google ID Token from Credential Response
-        val credential = credentialResponse.credential
-        val idToken: String = try {
+            val credential = credentialResponse.credential
             if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
-                googleIdTokenCredential.idToken
+                idToken = googleIdTokenCredential.idToken
             } else {
-                Log.e(tag, "Unsupported credential type: ${credential.type}")
-                return@withContext Result.failure(Exception("Unsupported credential returned from Google Sign-In."))
+                Log.w(tag, "Unrecognized credential type: ${credential.type}")
             }
-        } catch (e: GoogleIdTokenParsingException) {
-            Log.e(tag, "Failed to parse Google ID token: ${e.message}")
+        } catch (e: GetCredentialCancellationException) {
             return@withContext Result.failure(e)
         } catch (e: Exception) {
-            Log.e(tag, "Unexpected error parsing credential: ${e.javaClass.simpleName}")
-            return@withContext Result.failure(e)
+            Log.w(tag, "Credential Manager error: ${e.message}. Attempting GoogleSignIn fallback if available.")
         }
 
-        // Step 4: Authenticate with Firebase using Google Auth Credential
+        // Step 2: Fallback to GoogleSignIn API if ID token was not acquired via Credential Manager
+        if (idToken.isNullOrBlank()) {
+            try {
+                val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                    .requestIdToken(resolvedClientId)
+                    .requestEmail()
+                    .build()
+                val googleSignInClient = GoogleSignIn.getClient(context, gso)
+                val account: GoogleSignInAccount? = GoogleSignIn.getLastSignedInAccount(context)
+                if (account?.idToken != null) {
+                    idToken = account.idToken
+                }
+            } catch (gse: Exception) {
+                Log.w(tag, "GoogleSignIn fallback check: ${gse.message}")
+            }
+        }
+
+        if (idToken.isNullOrBlank()) {
+            return@withContext Result.failure(
+                Exception("Could not retrieve Google ID token. Please verify Google Play Services and OAuth configuration for package ${context.packageName}.")
+            )
+        }
+
+        // Step 3: Authenticate with Firebase using Google Auth Credential
         try {
             val firebaseCredential = GoogleAuthProvider.getCredential(idToken, null)
             val authResult = authInstance.signInWithCredential(firebaseCredential).await()
@@ -288,19 +354,24 @@ class FirebaseAuthService(private val context: Context) {
             Log.e(tag, "Firebase invalid user: ${e.errorCode}")
             Result.failure(Exception("This Google account is disabled or restricted."))
         } catch (e: FirebaseAuthInvalidCredentialsException) {
-            Log.e(tag, "Firebase invalid credentials: ${e.errorCode}")
-            Result.failure(Exception("Google Sign-In verification failed (${e.errorCode})."))
+            Log.e(tag, "Firebase invalid credentials: ${e.errorCode} - ${e.message}")
+            Result.failure(Exception("Google Sign-In credential validation failed (${e.errorCode ?: e.message})."))
+        } catch (e: FirebaseAuthException) {
+            Log.e(tag, "FirebaseAuthException: [${e.errorCode}] ${e.message}")
+            Result.failure(Exception("Firebase Authentication error: ${e.message ?: e.errorCode}"))
         } catch (e: FirebaseException) {
-            Log.e(tag, "Firebase sign-in error: ${e.javaClass.simpleName} - ${e.message}")
-            Result.failure(e)
+            Log.e(tag, "FirebaseException: ${e.message}")
+            Result.failure(Exception("Firebase error: ${e.message}"))
         } catch (e: Exception) {
-            Log.e(tag, "Unexpected error during Firebase credential sign-in: ${e.javaClass.simpleName} - ${e.message}")
+            Log.e(tag, "Unexpected error during Firebase sign-in: ${e.javaClass.simpleName} - ${e.message}")
             Result.failure(e)
         }
     }
 
     suspend fun signInWithEmail(email: String, pass: String): Result<UserSummary> = withContext(Dispatchers.IO) {
-        val authInstance = auth ?: return@withContext Result.failure(Exception("Firebase Auth not initialized."))
+        val authInstance = auth ?: return@withContext Result.failure(
+            Exception("Firebase Auth not initialized: ${lastInitError?.localizedMessage ?: "Check configuration"}")
+        )
         try {
             val authResult = authInstance.signInWithEmailAndPassword(email.trim(), pass).await()
             val user = authResult.user ?: return@withContext Result.failure(Exception("User is null after sign in"))
@@ -313,6 +384,10 @@ class FirebaseAuthService(private val context: Context) {
             )
             _currentUser.value = summary
             Result.success(summary)
+        } catch (e: FirebaseNetworkException) {
+            Result.failure(Exception("Network unavailable. Please check your internet connection."))
+        } catch (e: FirebaseAuthException) {
+            Result.failure(Exception("Sign-in failed: ${e.localizedMessage ?: e.errorCode}"))
         } catch (e: Exception) {
             Log.e(tag, "Email Sign-In failed", e)
             Result.failure(e)
@@ -320,7 +395,9 @@ class FirebaseAuthService(private val context: Context) {
     }
 
     suspend fun signUpWithEmail(email: String, pass: String, name: String): Result<UserSummary> = withContext(Dispatchers.IO) {
-        val authInstance = auth ?: return@withContext Result.failure(Exception("Firebase Auth not initialized."))
+        val authInstance = auth ?: return@withContext Result.failure(
+            Exception("Firebase Auth not initialized: ${lastInitError?.localizedMessage ?: "Check configuration"}")
+        )
         try {
             val authResult = authInstance.createUserWithEmailAndPassword(email.trim(), pass).await()
             val user = authResult.user ?: return@withContext Result.failure(Exception("User is null after registration"))
@@ -340,6 +417,10 @@ class FirebaseAuthService(private val context: Context) {
             )
             _currentUser.value = summary
             Result.success(summary)
+        } catch (e: FirebaseNetworkException) {
+            Result.failure(Exception("Network unavailable. Please check your internet connection."))
+        } catch (e: FirebaseAuthException) {
+            Result.failure(Exception("Account creation failed: ${e.localizedMessage ?: e.errorCode}"))
         } catch (e: Exception) {
             Log.e(tag, "Email Registration failed", e)
             Result.failure(e)
@@ -347,7 +428,9 @@ class FirebaseAuthService(private val context: Context) {
     }
 
     suspend fun signInAnonymously(): Result<UserSummary> = withContext(Dispatchers.IO) {
-        val authInstance = auth ?: return@withContext Result.failure(Exception("Firebase Auth not initialized."))
+        val authInstance = auth ?: return@withContext Result.failure(
+            Exception("Firebase Auth not initialized: ${lastInitError?.localizedMessage ?: "Check configuration"}")
+        )
         try {
             val authResult = authInstance.signInAnonymously().await()
             val user = authResult.user ?: return@withContext Result.failure(Exception("Anonymous user is null"))
@@ -360,6 +443,10 @@ class FirebaseAuthService(private val context: Context) {
             )
             _currentUser.value = summary
             Result.success(summary)
+        } catch (e: FirebaseNetworkException) {
+            Result.failure(Exception("Network unavailable. Please check your internet connection."))
+        } catch (e: FirebaseAuthException) {
+            Result.failure(Exception("Guest sign-in failed: ${e.localizedMessage ?: e.errorCode}"))
         } catch (e: Exception) {
             Log.e(tag, "Anonymous Sign-In failed", e)
             Result.failure(e)

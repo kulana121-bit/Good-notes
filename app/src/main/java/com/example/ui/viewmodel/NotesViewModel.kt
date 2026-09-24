@@ -634,7 +634,6 @@ class NotesViewModel(
         }
     }
 
-    // Google Drive Integration Foundation
     fun refreshDriveStatus() {
         viewModelScope.launch {
             val authState = driveService.checkAuthorization()
@@ -689,7 +688,6 @@ class NotesViewModel(
         }
     }
 
-    // Unified Cloud Backup & Restore Methods
     fun setAutoCloudBackup(enabled: Boolean) {
         viewModelScope.launch { repository.setAutoCloudBackup(enabled) }
     }
