@@ -27,23 +27,28 @@ android {
     create("release") {
       val envKeystoreFile = System.getenv("KEYSTORE_FILE")
       val rootKeystore = file("${rootDir}/release.keystore")
-      val rootDebugKeystore = file("${rootDir}/debug.keystore")
       val appKeystore = file("release.keystore")
       val targetKeystore = when {
         envKeystoreFile != null && file(envKeystoreFile).exists() -> file(envKeystoreFile)
         rootKeystore.exists() -> rootKeystore
         appKeystore.exists() -> appKeystore
-        rootDebugKeystore.exists() -> rootDebugKeystore
-        else -> rootDebugKeystore
+        else -> null
       }
-      storeFile = targetKeystore
-      val isDebugFallback = targetKeystore == rootDebugKeystore
-      storePassword = System.getenv("KEYSTORE_PASSWORD") ?: if (isDebugFallback) "android" else "release123"
-      keyAlias = System.getenv("KEY_ALIAS") ?: if (isDebugFallback) "androiddebugkey" else "release-key"
-      keyPassword = System.getenv("KEY_PASSWORD") ?: if (isDebugFallback) "android" else "release123"
+      if (targetKeystore != null) {
+        storeFile = targetKeystore
+        storePassword = System.getenv("KEYSTORE_PASSWORD")
+        keyAlias = System.getenv("KEY_ALIAS")
+        keyPassword = System.getenv("KEY_PASSWORD")
+      }
     }
     create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
+      val rootDebugKeystore = file("${rootDir}/debug.keystore")
+      val appDebugKeystore = file("debug.keystore")
+      storeFile = when {
+        rootDebugKeystore.exists() -> rootDebugKeystore
+        appDebugKeystore.exists() -> appDebugKeystore
+        else -> rootDebugKeystore
+      }
       storePassword = "android"
       keyAlias = "androiddebugkey"
       keyPassword = "android"
