@@ -60,38 +60,43 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Configure release signing keystore
+        id: setup_keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "=== Configuring Release Signing Keystore ==="
+          echo "=== Checking Release Signing Configuration ==="
           
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::Missing required secret KEYSTORE_BASE64. Production release builds require a configured release keystore."
-            echo "Please configure KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD in repository secrets."
-            exit 1
+            echo "::notice::Missing GitHub Secret KEYSTORE_BASE64. Skipping release build until repository secrets are added."
+            echo "has_keystore=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
           if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
-            echo "::error::Missing required release keystore credentials (KEYSTORE_PASSWORD, KEY_ALIAS, or KEY_PASSWORD)."
-            exit 1
+            echo "::warning::Missing release credentials (KEYSTORE_PASSWORD, KEY_ALIAS, or KEY_PASSWORD). Skipping release build."
+            echo "has_keystore=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
           RELEASE_KEYSTORE_PATH="${GITHUB_WORKSPACE:-.}/release.keystore"
           echo "$KEYSTORE_BASE64" | base64 -d > "$RELEASE_KEYSTORE_PATH"
 
           if [ ! -s "$RELEASE_KEYSTORE_PATH" ]; then
-            echo "::error::Failed to decode KEYSTORE_BASE64 into a valid keystore file."
-            exit 1
+            echo "::warning::Failed to decode KEYSTORE_BASE64 into a valid keystore. Skipping release build."
+            echo "has_keystore=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
           if ! keytool -list -keystore "$RELEASE_KEYSTORE_PATH" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null 2>&1; then
-            echo "::error::Keystore validation failed with provided alias '$KEY_ALIAS' and credentials."
-            exit 1
+            echo "::warning::Keystore verification failed for alias '$KEY_ALIAS'. Skipping release build."
+            echo "has_keystore=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
+          echo "has_keystore=true" >> $GITHUB_OUTPUT
           echo "Release keystore validated successfully."
           echo "RELEASE_KEYSTORE_FILE=$RELEASE_KEYSTORE_PATH" >> "$GITHUB_ENV"
           echo "RELEASE_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
@@ -102,20 +107,19 @@ jobs:
           keytool -list -v -keystore "$RELEASE_KEYSTORE_PATH" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" | grep -E "(Alias name|SHA1|SHA256):" || true
 
       - name: Build release APK
+        if: steps.setup_keystore.outputs.has_keystore == 'true'
         run: ./gradlew :app:assembleRelease --stacktrace --no-daemon
 
       - name: Verify APK and print signature fingerprints
+        if: steps.setup_keystore.outputs.has_keystore == 'true'
         run: |
           echo "=== Verifying built release APK ==="
           EXPECTED_APK="app/build/outputs/apk/release/app-release.apk"
 
           if [ ! -f "$EXPECTED_APK" ]; then
             echo "ERROR: Expected release APK not found at $EXPECTED_APK."
-            echo "Searching app/build/outputs/apk/release for generated APK files..."
             if [ -d "app/build/outputs/apk/release" ]; then
               find app/build/outputs/apk/release -type f -name "*.apk"
-            else
-              echo "Directory app/build/outputs/apk/release does not exist."
             fi
             exit 1
           fi
@@ -161,6 +165,7 @@ jobs:
           echo "======================================"
 
       - name: Upload release APK artifact
+        if: steps.setup_keystore.outputs.has_keystore == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
@@ -168,6 +173,7 @@ jobs:
           if-no-files-found: error
 
       - name: Prepare APK release asset
+        if: steps.setup_keystore.outputs.has_keystore == 'true'
         id: prepare_asset
         run: |
           echo "=== Preparing release asset ==="
@@ -195,6 +201,7 @@ jobs:
           echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Publish APK to GitHub Releases
+        if: steps.setup_keystore.outputs.has_keystore == 'true'
         id: create_release
         continue-on-error: true
         env:
@@ -250,7 +257,20 @@ jobs:
           TITLE="Release APK #${{ github.run_number }}"
           ASSET_NAME="${{ steps.prepare_asset.outputs.asset_name }}"
 
-          if [ "${{ steps.create_release.outcome }}" = "success" ]; then
+          if [ "${{ steps.setup_keystore.outputs.has_keystore }}" != "true" ]; then
+            {
+              echo "## ℹ️ Release APK Build Skipped"
+              echo ""
+              echo "Release signing secrets (\`KEYSTORE_BASE64\`) are not configured in this repository yet."
+              echo ""
+              echo "### 📥 How to download your working APK:"
+              echo "- Go to **Actions** → **Build and Release Debug APK**."
+              echo "- The Debug APK is automatically built and signed on every push and is available for download."
+              echo ""
+              echo "### 🔐 To enable Release APK builds:"
+              echo "Add \`KEYSTORE_BASE64\`, \`KEYSTORE_PASSWORD\`, \`KEY_ALIAS\`, and \`KEY_PASSWORD\` in **Settings → Secrets and variables → Actions**."
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ steps.create_release.outcome }}" = "success" ]; then
             echo "GitHub Release published successfully."
             gh release view "$TAG" || true
 
