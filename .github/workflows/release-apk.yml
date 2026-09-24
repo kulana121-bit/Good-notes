@@ -78,10 +78,10 @@ jobs:
             KEY_PASS="${KEY_PASSWORD:-$KEY_STORE_PASS}"
 
             if [ ! -s "$RELEASE_KEYSTORE_PATH" ]; then
-              echo "::warning::Failed to decode KEYSTORE_BASE64. Generating fallback release keystore..."
+              echo "::warning::Failed to decode KEYSTORE_BASE64. Falling back to persistent repository keystore..."
               rm -f "$RELEASE_KEYSTORE_PATH"
             elif ! keytool -list -keystore "$RELEASE_KEYSTORE_PATH" -storepass "$KEY_STORE_PASS" -alias "$ALIAS_NAME" > /dev/null 2>&1; then
-              echo "::warning::Custom keystore validation failed with provided credentials. Generating fallback release keystore..."
+              echo "::warning::Custom keystore validation failed with provided credentials. Falling back to persistent repository keystore..."
               rm -f "$RELEASE_KEYSTORE_PATH"
             else
               echo "Custom release keystore validated successfully."
@@ -93,33 +93,48 @@ jobs:
           fi
 
           if [ ! -f "$RELEASE_KEYSTORE_PATH" ]; then
-            echo "Generating production-ready release keystore for CI build..."
-            keytool -genkeypair -v \
-              -keystore "$RELEASE_KEYSTORE_PATH" \
-              -storepass releasepass123 \
-              -alias release \
-              -keypass releasepass123 \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Good Notes Release,O=Good Notes,C=US"
+            if [ -f "./debug.keystore.base64" ]; then
+              echo "Restoring registered persistent keystore from ./debug.keystore.base64..."
+              base64 -d ./debug.keystore.base64 > "$RELEASE_KEYSTORE_PATH"
+            elif [ -f "./debug.keystore" ]; then
+              echo "Copying registered persistent keystore from ./debug.keystore..."
+              cp ./debug.keystore "$RELEASE_KEYSTORE_PATH"
+            fi
 
-            echo "KEYSTORE_FILE=$RELEASE_KEYSTORE_PATH" >> "$GITHUB_ENV"
-            echo "KEYSTORE_PASSWORD=releasepass123" >> "$GITHUB_ENV"
-            echo "KEY_ALIAS=release" >> "$GITHUB_ENV"
-            echo "KEY_PASSWORD=releasepass123" >> "$GITHUB_ENV"
-            echo "Release keystore generated successfully."
+            if [ -s "$RELEASE_KEYSTORE_PATH" ]; then
+              echo "KEYSTORE_FILE=$RELEASE_KEYSTORE_PATH" >> "$GITHUB_ENV"
+              echo "KEYSTORE_PASSWORD=android" >> "$GITHUB_ENV"
+              echo "KEY_ALIAS=androiddebugkey" >> "$GITHUB_ENV"
+              echo "KEY_PASSWORD=android" >> "$GITHUB_ENV"
+              echo "Registered persistent keystore configured for release build."
+            else
+              echo "Generating fallback release keystore..."
+              keytool -genkeypair -v \
+                -keystore "$RELEASE_KEYSTORE_PATH" \
+                -storepass releasepass123 \
+                -alias release \
+                -keypass releasepass123 \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -dname "CN=Good Notes Release,O=Good Notes,C=US"
+
+              echo "KEYSTORE_FILE=$RELEASE_KEYSTORE_PATH" >> "$GITHUB_ENV"
+              echo "KEYSTORE_PASSWORD=releasepass123" >> "$GITHUB_ENV"
+              echo "KEY_ALIAS=release" >> "$GITHUB_ENV"
+              echo "KEY_PASSWORD=releasepass123" >> "$GITHUB_ENV"
+            fi
           fi
 
-          echo "=== Release Certificate Fingerprints ==="
-          STORE_PASS="${KEYSTORE_PASSWORD:-releasepass123}"
-          ALIAS="${KEY_ALIAS:-release}"
-          keytool -list -v -keystore "$RELEASE_KEYSTORE_PATH" -storepass "$STORE_PASS" -alias "$ALIAS" | grep -E "(Owner:|Issuer:|Alias name:|Valid from:|Certificate fingerprints:|SHA1:|SHA256:)" || true
+          echo "=== Release Keystore Fingerprints ==="
+          STORE_PASS="${KEYSTORE_PASSWORD:-android}"
+          ALIAS="${KEY_ALIAS:-androiddebugkey}"
+          keytool -list -v -keystore "$RELEASE_KEYSTORE_PATH" -storepass "$STORE_PASS" 2>/dev/null | grep -E "(Owner:|Issuer:|Alias name:|Valid from:|Certificate fingerprints:|SHA1:|SHA256:)" || true
 
       - name: Build release APK
         run: ./gradlew :app:assembleRelease --stacktrace --no-daemon
 
-      - name: Verify APK
+      - name: Verify APK and print signature fingerprints
         run: |
           echo "=== Verifying built release APK ==="
           EXPECTED_APK="app/build/outputs/apk/release/app-release.apk"
@@ -146,6 +161,16 @@ jobs:
           esac
 
           echo "Release APK verification successful: $EXPECTED_APK ($(stat -c%s "$EXPECTED_APK") bytes)"
+          
+          echo "=== APK Signing Certificate Fingerprints ==="
+          if command -v apksigner > /dev/null 2>&1; then
+            apksigner verify --print-certs "$EXPECTED_APK" || true
+          elif [ -n "$ANDROID_SDK_ROOT" ] && [ -f "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" ]; then
+            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$EXPECTED_APK" || true
+          else
+            echo "Checking APK cert with keytool..."
+            keytool -printcert -jarfile "$EXPECTED_APK" || true
+          fi
 
       - name: Upload release APK artifact
         uses: actions/upload-artifact@v4

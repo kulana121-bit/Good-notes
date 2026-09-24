@@ -142,6 +142,16 @@ jobs:
           
           echo "APK verification successful: $EXPECTED_APK ($(stat -c%s "$EXPECTED_APK") bytes)"
 
+          echo "=== APK Signing Certificate Fingerprints ==="
+          if command -v apksigner > /dev/null 2>&1; then
+            apksigner verify --print-certs "$EXPECTED_APK" || true
+          elif [ -n "$ANDROID_SDK_ROOT" ] && [ -f "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" ]; then
+            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$EXPECTED_APK" || true
+          else
+            echo "Checking APK cert with keytool..."
+            keytool -printcert -jarfile "$EXPECTED_APK" || true
+          fi
+
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
         with:

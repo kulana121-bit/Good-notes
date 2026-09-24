@@ -60,26 +60,14 @@ class FirebaseAuthService(private val context: Context) {
 
     private fun ensureFirebaseInitialized(): Boolean {
         return try {
-            if (FirebaseApp.getApps(context).isEmpty()) {
-                try {
-                    FirebaseApp.initializeApp(context)
-                    lastInitError = null
-                } catch (t: Throwable) {
-                    lastInitError = t
-                    Log.w(tag, "Standard Firebase initialization attempt: ${t.message}")
-                    val options = try { FirebaseOptions.fromResource(context) } catch (_: Throwable) { null }
-                    if (options != null) {
-                        try {
-                            FirebaseApp.initializeApp(context, options)
-                            lastInitError = null
-                        } catch (optErr: Throwable) {
-                            lastInitError = optErr
-                            Log.w(tag, "Firebase init with options: ${optErr.message}")
-                        }
-                    }
-                }
+            val app = FirebaseInitializer.initialize(context)
+            if (app != null) {
+                lastInitError = null
+                true
+            } else {
+                lastInitError = FirebaseInitializer.getLastError()
+                false
             }
-            FirebaseApp.getApps(context).isNotEmpty()
         } catch (t: Throwable) {
             lastInitError = t
             Log.w(tag, "Failed to initialize Firebase: ${t.message}")
