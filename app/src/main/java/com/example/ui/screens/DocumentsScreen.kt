@@ -112,48 +112,38 @@ fun DocumentsScreen(
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val granted = permissions.values.any { it }
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
         if (granted) {
             isScanning = true
             onScanDeviceDocuments { count ->
                 isScanning = false
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar(
-                        if (count > 0) "Found and indexed $count PDF documents from device"
-                        else "No new PDF documents discovered on device"
+                        if (count > 0) "Found and indexed $count PDF documents. Stored locally & synced with Google Drive."
+                        else "No new PDFs found in standard folders. Tap 'Import PDF' to select a file."
                     )
                 }
             }
         } else {
             coroutineScope.launch {
-                snackbarHostState.showSnackbar("Storage access permission required to scan device")
+                snackbarHostState.showSnackbar("Storage access permission required to scan device folders")
             }
         }
     }
 
     fun triggerDeviceScan() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val hasPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
-            if (hasPerm) {
-                isScanning = true
-                onScanDeviceDocuments { count ->
-                    isScanning = false
-                    coroutineScope.launch {
-                        snackbarHostState.showSnackbar(
-                            if (count > 0) "Found and indexed $count PDF documents from device"
-                            else "No new PDF documents discovered on device"
-                        )
-                    }
-                }
-            } else {
-                permissionLauncher.launch(
-                    arrayOf(
-                        Manifest.permission.READ_MEDIA_IMAGES,
-                        Manifest.permission.READ_MEDIA_VIDEO
+            // Android 13+: MediaStore / storage files query can scan directly
+            isScanning = true
+            onScanDeviceDocuments { count ->
+                isScanning = false
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar(
+                        if (count > 0) "Found and indexed $count PDF documents. Stored locally & synced with Google Drive."
+                        else "No new PDFs found in standard folders. Tap 'Import PDF' to select a file."
                     )
-                )
+                }
             }
         } else {
             val hasPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
@@ -163,13 +153,13 @@ fun DocumentsScreen(
                     isScanning = false
                     coroutineScope.launch {
                         snackbarHostState.showSnackbar(
-                            if (count > 0) "Found and indexed $count PDF documents from device"
-                            else "No new PDF documents discovered on device"
+                            if (count > 0) "Found and indexed $count PDF documents. Stored locally & synced with Google Drive."
+                            else "No new PDFs found in standard folders. Tap 'Import PDF' to select a file."
                         )
                     }
                 }
             } else {
-                permissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
+                permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
         }
     }

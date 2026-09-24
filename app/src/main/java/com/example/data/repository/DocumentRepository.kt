@@ -85,13 +85,15 @@ class DocumentRepository(
     }
 
     /**
-     * Scans the device in real-time for PDF documents and indexes them.
+     * Scans the device in real-time for PDF documents, copies them safely to app-internal storage,
+     * computes content hashes for deduplication, generates thumbnails, and stages them for Google Drive sync.
      */
     suspend fun scanDevicePdfDocuments(context: Context): Result<Int> = withContext(Dispatchers.IO) {
         try {
             var scannedCount = 0
             val existingDocs = documentDao.getAllDocumentsDirect()
-            val existingPaths = existingDocs.map { it.localPath }.toSet()
+            val existingHashes = existingDocs.mapNotNull { it.contentHash }.toSet()
+            val existingNamesAndSizes = existingDocs.map { "${it.fileName}_${it.fileSize}" }.toSet()
 
             // 1. Scan via MediaStore
             try {
@@ -119,50 +121,81 @@ class DocumentRepository(
 
                     while (cursor.moveToNext()) {
                         val mediaId = cursor.getLong(idCol)
-                        val fileName = cursor.getString(nameCol) ?: "document_$mediaId.pdf"
+                        val rawFileName = cursor.getString(nameCol) ?: "document_$mediaId.pdf"
+                        val safeFileName = SecurityUtils.sanitizeFileName(rawFileName)
                         val size = cursor.getLong(sizeCol)
                         val modDate = cursor.getLong(modCol) * 1000L
                         val contentUri = ContentUris.withAppendedId(MediaStore.Files.getContentUri("external"), mediaId)
-                        val uriString = contentUri.toString()
 
-                        if (!existingPaths.contains(uriString) && size > 0) {
-                            val docId = "doc_ms_$mediaId"
-                            var pageCount = 1
+                        if (size > 0 && !existingNamesAndSizes.contains("${safeFileName}_$size")) {
+                            val docId = "doc_ms_${UUID.randomUUID().toString().take(8)}"
+                            val destinationFile = SecurityUtils.getSafeDocumentFile(context, docId, safeFileName)
+
+                            val digest = MessageDigest.getInstance("SHA-256")
+                            var copySuccess = false
                             try {
-                                context.contentResolver.openFileDescriptor(contentUri, "r")?.use { pfd ->
-                                    PdfRenderer(pfd).use { renderer ->
-                                        pageCount = renderer.pageCount
+                                context.contentResolver.openInputStream(contentUri)?.use { input ->
+                                    FileOutputStream(destinationFile).use { output ->
+                                        val buffer = ByteArray(16384)
+                                        var read: Int
+                                        while (input.read(buffer).also { read = it } != -1) {
+                                            digest.update(buffer, 0, read)
+                                            output.write(buffer, 0, read)
+                                        }
+                                        output.flush()
                                     }
+                                    copySuccess = destinationFile.length() > 0
                                 }
-                            } catch (_: Exception) {}
+                            } catch (streamErr: Exception) {
+                                Log.w(tag, "Could not copy MediaStore file $mediaId: ${streamErr.message}")
+                                destinationFile.delete()
+                            }
 
-                            val accentColor = accentColors[(uriString.hashCode() and 0x7FFFFFFF) % accentColors.size]
-                            val displayName = fileName.removeSuffix(".pdf").replace("_", " ")
+                            if (copySuccess) {
+                                val fileSize = destinationFile.length()
+                                val contentHash = digest.digest().joinToString("") { "%02x".format(it) }
 
-                            val thumb = PdfThumbnailHelper.generateThumbnailFromUri(context, docId, contentUri)
+                                if (existingHashes.contains(contentHash)) {
+                                    destinationFile.delete()
+                                } else {
+                                    var pageCount = 1
+                                    try {
+                                        ParcelFileDescriptor.open(destinationFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                                            PdfRenderer(pfd).use { renderer ->
+                                                pageCount = renderer.pageCount
+                                            }
+                                        }
+                                    } catch (_: Exception) {}
 
-                            val docEntity = DocumentEntity(
-                                id = docId,
-                                fileName = fileName,
-                                displayName = displayName,
-                                localPath = uriString,
-                                fileSize = size,
-                                mimeType = "application/pdf",
-                                pageCount = pageCount.coerceAtLeast(1),
-                                createdAt = modDate,
-                                updatedAt = modDate,
-                                lastOpenedAt = modDate,
-                                lastOpenedPage = 0,
-                                isFavorite = false,
-                                isDeleted = false,
-                                syncStatus = "PENDING",
-                                downloadState = "AVAILABLE_OFFLINE",
-                                uploadState = "PENDING_UPLOAD",
-                                thumbnailPath = thumb,
-                                accentColorHex = accentColor
-                            )
-                            documentDao.insertDocument(docEntity)
-                            scannedCount++
+                                    val accentColor = accentColors[(destinationFile.absolutePath.hashCode() and 0x7FFFFFFF) % accentColors.size]
+                                    val displayName = safeFileName.removeSuffix(".pdf").replace("_", " ").trim()
+                                    val thumb = PdfThumbnailHelper.generateThumbnail(context, docId, destinationFile)
+
+                                    val docEntity = DocumentEntity(
+                                        id = docId,
+                                        fileName = safeFileName,
+                                        displayName = displayName.ifBlank { "Scanned Document" },
+                                        localPath = destinationFile.absolutePath,
+                                        fileSize = fileSize,
+                                        mimeType = "application/pdf",
+                                        contentHash = contentHash,
+                                        pageCount = pageCount.coerceAtLeast(1),
+                                        createdAt = if (modDate > 0) modDate else System.currentTimeMillis(),
+                                        updatedAt = System.currentTimeMillis(),
+                                        lastOpenedAt = System.currentTimeMillis(),
+                                        lastOpenedPage = 0,
+                                        isFavorite = false,
+                                        isDeleted = false,
+                                        syncStatus = "PENDING",
+                                        downloadState = "AVAILABLE_OFFLINE",
+                                        uploadState = "PENDING_UPLOAD",
+                                        thumbnailPath = thumb,
+                                        accentColorHex = accentColor
+                                    )
+                                    documentDao.insertDocument(docEntity)
+                                    scannedCount++
+                                }
+                            }
                         }
                     }
                 }
@@ -170,59 +203,95 @@ class DocumentRepository(
                 Log.w(tag, "MediaStore PDF query warning: ${e.message}")
             }
 
-            // 2. Scan standard directories
-            val targetDirs = listOf(
+            // 2. Scan standard directories (Downloads, Documents)
+            val targetDirs = listOfNotNull(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
+                context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS),
+                context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
             )
 
             for (dir in targetDirs) {
                 if (dir.exists() && dir.isDirectory) {
                     val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".pdf", ignoreCase = true) } ?: emptyArray()
                     for (file in files) {
-                        val path = file.absolutePath
-                        if (!existingPaths.contains(path) && file.length() > 0) {
-                            val docId = "doc_f_${path.hashCode() and 0x7FFFFFFF}"
-                            var pageCount = 1
+                        val safeFileName = SecurityUtils.sanitizeFileName(file.name)
+                        val size = file.length()
+                        if (size > 0 && !existingNamesAndSizes.contains("${safeFileName}_$size")) {
+                            val docId = "doc_f_${UUID.randomUUID().toString().take(8)}"
+                            val destinationFile = SecurityUtils.getSafeDocumentFile(context, docId, safeFileName)
+
+                            val digest = MessageDigest.getInstance("SHA-256")
+                            var copySuccess = false
                             try {
-                                ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-                                    PdfRenderer(pfd).use { renderer ->
-                                        pageCount = renderer.pageCount
+                                file.inputStream().use { input ->
+                                    FileOutputStream(destinationFile).use { output ->
+                                        val buffer = ByteArray(16384)
+                                        var read: Int
+                                        while (input.read(buffer).also { read = it } != -1) {
+                                            digest.update(buffer, 0, read)
+                                            output.write(buffer, 0, read)
+                                        }
+                                        output.flush()
                                     }
+                                    copySuccess = destinationFile.length() > 0
                                 }
-                            } catch (_: Exception) {}
+                            } catch (streamErr: Exception) {
+                                Log.w(tag, "Could not copy file from ${file.absolutePath}: ${streamErr.message}")
+                                destinationFile.delete()
+                            }
 
-                            val accentColor = accentColors[(path.hashCode() and 0x7FFFFFFF) % accentColors.size]
-                            val displayName = file.name.removeSuffix(".pdf").replace("_", " ")
-                            val thumb = PdfThumbnailHelper.generateThumbnail(context, docId, file)
+                            if (copySuccess) {
+                                val fileSize = destinationFile.length()
+                                val contentHash = digest.digest().joinToString("") { "%02x".format(it) }
 
-                            val docEntity = DocumentEntity(
-                                id = docId,
-                                fileName = file.name,
-                                displayName = displayName,
-                                localPath = path,
-                                fileSize = file.length(),
-                                mimeType = "application/pdf",
-                                pageCount = pageCount.coerceAtLeast(1),
-                                createdAt = file.lastModified(),
-                                updatedAt = file.lastModified(),
-                                lastOpenedAt = file.lastModified(),
-                                lastOpenedPage = 0,
-                                isFavorite = false,
-                                isDeleted = false,
-                                syncStatus = "PENDING",
-                                downloadState = "AVAILABLE_OFFLINE",
-                                uploadState = "PENDING_UPLOAD",
-                                thumbnailPath = thumb,
-                                accentColorHex = accentColor
-                            )
-                            documentDao.insertDocument(docEntity)
-                            scannedCount++
+                                if (existingHashes.contains(contentHash)) {
+                                    destinationFile.delete()
+                                } else {
+                                    var pageCount = 1
+                                    try {
+                                        ParcelFileDescriptor.open(destinationFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                                            PdfRenderer(pfd).use { renderer ->
+                                                pageCount = renderer.pageCount
+                                            }
+                                        }
+                                    } catch (_: Exception) {}
+
+                                    val accentColor = accentColors[(destinationFile.absolutePath.hashCode() and 0x7FFFFFFF) % accentColors.size]
+                                    val displayName = safeFileName.removeSuffix(".pdf").replace("_", " ").trim()
+                                    val thumb = PdfThumbnailHelper.generateThumbnail(context, docId, destinationFile)
+
+                                    val docEntity = DocumentEntity(
+                                        id = docId,
+                                        fileName = safeFileName,
+                                        displayName = displayName.ifBlank { "Scanned Document" },
+                                        localPath = destinationFile.absolutePath,
+                                        fileSize = fileSize,
+                                        mimeType = "application/pdf",
+                                        contentHash = contentHash,
+                                        pageCount = pageCount.coerceAtLeast(1),
+                                        createdAt = file.lastModified(),
+                                        updatedAt = System.currentTimeMillis(),
+                                        lastOpenedAt = System.currentTimeMillis(),
+                                        lastOpenedPage = 0,
+                                        isFavorite = false,
+                                        isDeleted = false,
+                                        syncStatus = "PENDING",
+                                        downloadState = "AVAILABLE_OFFLINE",
+                                        uploadState = "PENDING_UPLOAD",
+                                        thumbnailPath = thumb,
+                                        accentColorHex = accentColor
+                                    )
+                                    documentDao.insertDocument(docEntity)
+                                    scannedCount++
+                                }
+                            }
                         }
                     }
                 }
             }
 
+            Log.i(tag, "scanDevicePdfDocuments completed: $scannedCount new PDFs discovered & stored")
             Result.success(scannedCount)
         } catch (e: Exception) {
             Log.e(tag, "Failed to scan device PDFs", e)

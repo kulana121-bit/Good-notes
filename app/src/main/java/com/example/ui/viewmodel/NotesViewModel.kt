@@ -523,7 +523,12 @@ class NotesViewModel(
     fun scanDeviceDocuments(onResult: (Int) -> Unit = {}) {
         viewModelScope.launch {
             val result = documentRepository.scanDevicePdfDocuments(getApplication())
-            onResult(result.getOrDefault(0))
+            val count = result.getOrDefault(0)
+            if (count > 0) {
+                // Immediately trigger cloud and Google Drive sync for newly discovered PDFs
+                syncManager.syncNow()
+            }
+            onResult(count)
         }
     }
 

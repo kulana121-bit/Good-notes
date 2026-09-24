@@ -90,10 +90,14 @@
 # --- Coil ---
 -dontwarn coil.**
 
-# --- Firebase ---
+# --- Firebase & Google Services & Credential Manager ---
 -keep class com.google.firebase.** { *; }
 -keep class com.google.android.gms.** { *; }
+-keep class androidx.credentials.** { *; }
+-keep class com.google.android.libraries.identity.googleid.** { *; }
 -dontwarn com.google.firebase.**
+-dontwarn androidx.credentials.**
+-dontwarn com.google.android.libraries.identity.googleid.**
 -keepclassmembers class * {
     @com.google.firebase.firestore.PropertyName <fields>;
     @com.google.firebase.firestore.PropertyName <methods>;
