@@ -3,6 +3,7 @@ package com.example.ui.components
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -70,6 +71,15 @@ fun FloatingActionCapsule(
 
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
+    val capsuleBgColor = if (isDark) Color(0xFF222227) else Color(0xFFFFFFFF)
+    val capsuleBorderColor = if (isDark) Color(0x38FFFFFF) else Color(0x1A000000)
+
+    val addBgColor = if (isDark) Color(0xFFF7D44C) else Color(0xFF18181B)
+    val addIconColor = if (isDark) Color(0xFF121212) else Color.White
+
+    val micBgColor = if (isDark) Color(0x2EFFFFFF) else Color(0x12000000)
+    val micIconColor = if (isDark) Color(0xFFF4F4F6) else Color(0xFF18181B)
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -81,27 +91,28 @@ fun FloatingActionCapsule(
             modifier = Modifier
                 .shadow(
                     elevation = elevation,
-                    shape = RoundedCornerShape(36.dp),
-                    ambientColor = Color(0x66000000),
-                    spotColor = Color(0x66000000)
+                    shape = CircleShape,
+                    ambientColor = if (isDark) Color(0x99000000) else Color(0x33000000),
+                    spotColor = if (isDark) Color(0xCC000000) else Color(0x44000000)
                 )
-                .glassmorphism(
-                    shape = RoundedCornerShape(36.dp),
-                    blurRadius = 20.dp,
-                    isDark = isDark,
-                    alpha = if (isDark) 0.85f else 0.88f
+                .clip(CircleShape)
+                .background(capsuleBgColor, CircleShape)
+                .border(
+                    width = 1.dp,
+                    color = capsuleBorderColor,
+                    shape = CircleShape
                 )
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Primary Dominant circular "+" Button
+            // Primary Dominant Circular "+" Create Note Button
             Box(
                 modifier = Modifier
                     .scale(addScale)
-                    .size(54.dp)
+                    .size(52.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF0F0F10))
+                    .background(addBgColor)
                     .clickable(
                         interactionSource = addInteraction,
                         indication = null,
@@ -116,18 +127,18 @@ fun FloatingActionCapsule(
                 Icon(
                     imageVector = Icons.Default.Add,
                     contentDescription = "New Note",
-                    tint = Color.White,
-                    modifier = Modifier.size(26.dp)
+                    tint = addIconColor,
+                    modifier = Modifier.size(28.dp)
                 )
             }
 
-            // Secondary Translucent Microphone Capsule Control
+            // Secondary Voice Note (Microphone) Button
             Box(
                 modifier = Modifier
                     .scale(micScale)
-                    .size(width = 48.dp, height = 48.dp)
+                    .size(48.dp)
                     .clip(CircleShape)
-                    .background(if (isDark) Color(0x33FFFFFF) else Color(0x44FFFFFF))
+                    .background(micBgColor)
                     .clickable(
                         interactionSource = micInteraction,
                         indication = null,
@@ -142,8 +153,8 @@ fun FloatingActionCapsule(
                 Icon(
                     imageVector = Icons.Default.Mic,
                     contentDescription = "Voice Note",
-                    tint = if (isDark) Color(0xFFDDDDDD) else Color(0xFF222222),
-                    modifier = Modifier.size(20.dp)
+                    tint = micIconColor,
+                    modifier = Modifier.size(22.dp)
                 )
             }
         }

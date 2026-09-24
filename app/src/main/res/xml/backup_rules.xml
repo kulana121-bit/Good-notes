@@ -3,4 +3,12 @@
     <include domain="file" path="."/>
     <include domain="database" path="."/>
     <include domain="sharedpref" path="."/>
+
+    <!-- Exclude sensitive caches, temporary files, and auth credentials -->
+    <exclude domain="root" path="cache" />
+    <exclude domain="file" path="cache" />
+    <exclude domain="file" path="temp" />
+    <exclude domain="sharedpref" path="com.google.android.gms.auth.api.signin.xml" />
+    <exclude domain="sharedpref" path="com.google.android.gms.signin.xml" />
+    <exclude domain="sharedpref" path="com.google.firebase.auth.api.Store.xml" />
 </full-backup-content>

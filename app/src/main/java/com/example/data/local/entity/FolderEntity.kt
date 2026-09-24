@@ -16,5 +16,10 @@ data class FolderEntity(
     @PrimaryKey val id: String,
     val name: String,
     val colorHex: Long = 0xFFEB7A53,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+    val isDeleted: Boolean = false,
+    val syncStatus: String = "SYNCED",
+    val version: Long = 1L,
+    val lastModifiedDeviceId: String = ""
 )

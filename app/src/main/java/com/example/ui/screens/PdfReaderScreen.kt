@@ -6,6 +6,7 @@ import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Brightness4
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FitScreen
@@ -125,6 +127,7 @@ fun PdfReaderScreen(
     onBack: () -> Unit,
     onPageChanged: (Int) -> Unit = {},
     onToggleFavorite: (String) -> Unit = {},
+    onDownloadDocument: (Document) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -145,6 +148,16 @@ fun PdfReaderScreen(
     var isThumbnailsVisible by remember { mutableStateOf(false) }
     var isJumpDialogVisible by remember { mutableStateOf(false) }
     var readingMode by remember { mutableStateOf(PdfReadingMode.LIGHT_PAPER) }
+
+    BackHandler {
+        if (isJumpDialogVisible) {
+            isJumpDialogVisible = false
+        } else if (isThumbnailsVisible) {
+            isThumbnailsVisible = false
+        } else {
+            onBack()
+        }
+    }
 
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = document.lastOpenedPage)
     val pageBitmaps = remember { mutableStateMapOf<Int, Bitmap>() }
@@ -279,7 +292,77 @@ fun PdfReaderScreen(
             .fillMaxSize()
             .background(backgroundColor)
     ) {
-        if (isLoading) {
+        if (document.isCloudOnly || (document.driveFileId != null && document.localPath.isBlank())) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(76.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.CloudDownload,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(38.dp)
+                        )
+                    }
+
+                    Text(
+                        text = "Document in Google Drive",
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontFamily = OutfitFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                    )
+
+                    Text(
+                        text = "\"${document.displayName}\" (${document.fileSizeFormatted}) is stored in Google Drive. Download it to read and annotate offline.",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontFamily = OutfitFontFamily,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    )
+
+                    if (document.downloadState == "DOWNLOADING") {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Text(
+                            text = "Downloading from Drive...",
+                            fontFamily = OutfitFontFamily,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        Button(
+                            onClick = { onDownloadDocument(document) },
+                            shape = RoundedCornerShape(20.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        ) {
+                            Icon(imageVector = Icons.Outlined.CloudDownload, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Download Document", fontFamily = OutfitFontFamily, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        } else if (isLoading) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -321,6 +404,19 @@ fun PdfReaderScreen(
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                         )
                     )
+                    if (document.driveFileId != null) {
+                        Button(
+                            onClick = { onDownloadDocument(document) },
+                            shape = RoundedCornerShape(20.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Icon(imageVector = Icons.Outlined.CloudDownload, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Re-download from Drive", fontFamily = OutfitFontFamily)
+                        }
+                    }
                 }
             }
         } else {

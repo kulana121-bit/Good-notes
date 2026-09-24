@@ -11,7 +11,11 @@ import com.squareup.moshi.JsonClass
     indices = [
         Index(value = ["isDeleted"]),
         Index(value = ["isFavorite"]),
-        Index(value = ["lastOpenedAt"])
+        Index(value = ["lastOpenedAt"]),
+        Index(value = ["driveFileId"]),
+        Index(value = ["contentHash"]),
+        Index(value = ["downloadState"]),
+        Index(value = ["uploadState"])
     ]
 )
 data class DocumentEntity(
@@ -19,16 +23,23 @@ data class DocumentEntity(
     val fileName: String,
     val displayName: String,
     val localPath: String,
+    val driveFileId: String? = null,
     val fileSize: Long,
     val mimeType: String = "application/pdf",
+    val contentHash: String? = null,
     val pageCount: Int = 1,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     val lastOpenedAt: Long = System.currentTimeMillis(),
     val lastOpenedPage: Int = 0,
+    val lastSyncedAt: Long = 0L,
     val isFavorite: Boolean = false,
     val isDeleted: Boolean = false,
+    val deletedAt: Long = 0L,
     val syncStatus: String = "PENDING",
+    val downloadState: String = "AVAILABLE_OFFLINE", // AVAILABLE_OFFLINE, DOWNLOADING, CLOUD_ONLY, FAILED
+    val uploadState: String = "IDLE", // IDLE, PENDING_UPLOAD, UPLOADING, UPLOADED, FAILED
+    val thumbnailPath: String? = null,
     val remoteStorageRef: String? = null,
     val accentColorHex: Long = 0xFFFEEA9F
 )

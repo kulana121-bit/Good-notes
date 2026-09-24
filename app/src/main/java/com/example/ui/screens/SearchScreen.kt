@@ -151,13 +151,13 @@ fun SearchScreen(
                     if (query.isNotEmpty()) {
                         IconButton(
                             onClick = { onQueryChange("") },
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.Close,
                                 contentDescription = "Clear search",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
@@ -210,8 +210,8 @@ fun SearchScreen(
             if (searchResults.isEmpty()) {
                 EmptyState(
                     icon = Icons.Outlined.Search,
-                    title = "No results for \"$query\"",
-                    subtitle = "Check your spelling or try searching for keywords like Lecture, Plan, or Biology."
+                    title = "No results found",
+                    subtitle = "No matches for \"$query\". Check your spelling or try searching for keywords like Lecture, Plan, or Biology."
                 )
             } else {
                 LazyColumn(

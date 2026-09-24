@@ -20,14 +20,50 @@ class FirestoreNotesService(private val context: Context) {
     private val isFirebaseInitialized: Boolean
         get() = try {
             FirebaseApp.getApps(context).isNotEmpty()
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             false
         }
 
     private val firestore: FirebaseFirestore?
-        get() = if (isFirebaseInitialized) FirebaseFirestore.getInstance() else null
+        get() = if (isFirebaseInitialized) {
+            try {
+                val app = FirebaseApp.getInstance()
+                val dbIdRes = try {
+                    context.resources.getIdentifier("firestore_database_id", "string", context.packageName)
+                } catch (_: Throwable) { 0 }
+                val dbId = if (dbIdRes != 0) {
+                    try { context.getString(dbIdRes) } catch (_: Throwable) { null }
+                } else null
+
+                if (!dbId.isNullOrBlank()) {
+                    try {
+                        FirebaseFirestore.getInstance(app, dbId)
+                    } catch (_: Throwable) {
+                        FirebaseFirestore.getInstance()
+                    }
+                } else {
+                    FirebaseFirestore.getInstance()
+                }
+            } catch (t: Throwable) {
+                Log.w(tag, "FirebaseFirestore instance warning: ${t.message}")
+                null
+            }
+        } else null
+
+    private fun validateUid(uid: String): Boolean {
+        if (uid.isBlank()) return false
+        val currentAuthUid = try {
+            if (isFirebaseInitialized) {
+                com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+            } else null
+        } catch (_: Throwable) { null }
+        return currentAuthUid == null || currentAuthUid == uid
+    }
 
     suspend fun uploadNote(uid: String, note: NoteEntity): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!validateUid(uid)) {
+            return@withContext Result.failure(SecurityException("Unauthorized access: active user does not match target UID"))
+        }
         val db = firestore ?: return@withContext Result.failure(Exception("Firebase is not initialized"))
 
         try {
@@ -50,6 +86,9 @@ class FirestoreNotesService(private val context: Context) {
                 "imageUri" to note.imageUri,
                 "audioUri" to note.audioUri,
                 "audioDurationMs" to note.audioDurationMs,
+                "version" to note.version,
+                "lastModifiedDeviceId" to note.lastModifiedDeviceId,
+                "deletedAt" to note.deletedAt,
                 "serverUpdatedAt" to FieldValue.serverTimestamp()
             )
 
@@ -68,6 +107,9 @@ class FirestoreNotesService(private val context: Context) {
     }
 
     suspend fun fetchAllNotes(uid: String): Result<List<NoteEntity>> = withContext(Dispatchers.IO) {
+        if (!validateUid(uid)) {
+            return@withContext Result.failure(SecurityException("Unauthorized access: active user does not match target UID"))
+        }
         val db = firestore ?: return@withContext Result.failure(Exception("Firebase is not initialized"))
 
         try {
@@ -96,6 +138,9 @@ class FirestoreNotesService(private val context: Context) {
                 val imageUri = doc.getString("imageUri")
                 val audioUri = doc.getString("audioUri")
                 val audioDurationMs = doc.getLong("audioDurationMs") ?: 0L
+                val version = doc.getLong("version") ?: 1L
+                val lastModifiedDeviceId = doc.getString("lastModifiedDeviceId") ?: ""
+                val deletedAt = doc.getLong("deletedAt") ?: 0L
 
                 NoteEntity(
                     id = id,
@@ -118,7 +163,10 @@ class FirestoreNotesService(private val context: Context) {
                     audioDurationMs = audioDurationMs,
                     syncStatus = "SYNCED",
                     syncedAt = System.currentTimeMillis(),
-                    remoteId = id
+                    remoteId = id,
+                    version = version,
+                    lastModifiedDeviceId = lastModifiedDeviceId,
+                    deletedAt = deletedAt
                 )
             }
 
@@ -130,6 +178,9 @@ class FirestoreNotesService(private val context: Context) {
     }
 
     suspend fun uploadFolder(uid: String, folder: FolderEntity): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!validateUid(uid)) {
+            return@withContext Result.failure(SecurityException("Unauthorized access: active user does not match target UID"))
+        }
         val db = firestore ?: return@withContext Result.failure(Exception("Firebase is not initialized"))
 
         try {
@@ -138,6 +189,10 @@ class FirestoreNotesService(private val context: Context) {
                 "name" to folder.name,
                 "colorHex" to folder.colorHex,
                 "createdAt" to folder.createdAt,
+                "updatedAt" to folder.updatedAt,
+                "isDeleted" to folder.isDeleted,
+                "version" to folder.version,
+                "lastModifiedDeviceId" to folder.lastModifiedDeviceId,
                 "serverUpdatedAt" to FieldValue.serverTimestamp()
             )
 
@@ -156,6 +211,9 @@ class FirestoreNotesService(private val context: Context) {
     }
 
     suspend fun fetchAllFolders(uid: String): Result<List<FolderEntity>> = withContext(Dispatchers.IO) {
+        if (!validateUid(uid)) {
+            return@withContext Result.failure(SecurityException("Unauthorized access: active user does not match target UID"))
+        }
         val db = firestore ?: return@withContext Result.failure(Exception("Firebase is not initialized"))
 
         try {
@@ -170,12 +228,21 @@ class FirestoreNotesService(private val context: Context) {
                 val name = doc.getString("name") ?: return@mapNotNull null
                 val colorHex = doc.getLong("colorHex") ?: 0xFFEB7A53
                 val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                val updatedAt = doc.getLong("updatedAt") ?: createdAt
+                val isDeleted = doc.getBoolean("isDeleted") ?: false
+                val version = doc.getLong("version") ?: 1L
+                val lastModifiedDeviceId = doc.getString("lastModifiedDeviceId") ?: ""
 
                 FolderEntity(
                     id = id,
                     name = name,
                     colorHex = colorHex,
-                    createdAt = createdAt
+                    createdAt = createdAt,
+                    updatedAt = updatedAt,
+                    isDeleted = isDeleted,
+                    syncStatus = "SYNCED",
+                    version = version,
+                    lastModifiedDeviceId = lastModifiedDeviceId
                 )
             }
 
@@ -186,7 +253,38 @@ class FirestoreNotesService(private val context: Context) {
         }
     }
 
+    suspend fun deleteNote(uid: String, noteId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!validateUid(uid)) {
+            return@withContext Result.failure(SecurityException("Unauthorized access: active user does not match target UID"))
+        }
+        val db = firestore ?: return@withContext Result.failure(Exception("Firebase is not initialized"))
+        try {
+            db.collection("users").document(uid).collection("notes").document(noteId).delete().await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to delete remote note $noteId", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteFolder(uid: String, folderId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!validateUid(uid)) {
+            return@withContext Result.failure(SecurityException("Unauthorized access: active user does not match target UID"))
+        }
+        val db = firestore ?: return@withContext Result.failure(Exception("Firebase is not initialized"))
+        try {
+            db.collection("users").document(uid).collection("folders").document(folderId).delete().await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to delete remote folder $folderId", e)
+            Result.failure(e)
+        }
+    }
+
     suspend fun uploadDocumentMetadata(uid: String, document: DocumentEntity): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!validateUid(uid)) {
+            return@withContext Result.failure(SecurityException("Unauthorized access: active user does not match target UID"))
+        }
         val db = firestore ?: return@withContext Result.failure(Exception("Firebase is not initialized"))
 
         try {
@@ -202,6 +300,9 @@ class FirestoreNotesService(private val context: Context) {
                 "lastOpenedAt" to document.lastOpenedAt,
                 "isFavorite" to document.isFavorite,
                 "isDeleted" to document.isDeleted,
+                "deletedAt" to document.deletedAt,
+                "driveFileId" to document.driveFileId,
+                "contentHash" to document.contentHash,
                 "remoteStorageRef" to document.remoteStorageRef,
                 "accentColorHex" to document.accentColorHex,
                 "serverUpdatedAt" to FieldValue.serverTimestamp()
@@ -222,6 +323,9 @@ class FirestoreNotesService(private val context: Context) {
     }
 
     suspend fun fetchAllDocuments(uid: String): Result<List<DocumentEntity>> = withContext(Dispatchers.IO) {
+        if (!validateUid(uid)) {
+            return@withContext Result.failure(SecurityException("Unauthorized access: active user does not match target UID"))
+        }
         val db = firestore ?: return@withContext Result.failure(Exception("Firebase is not initialized"))
 
         try {
@@ -243,6 +347,9 @@ class FirestoreNotesService(private val context: Context) {
                 val lastOpenedAt = doc.getLong("lastOpenedAt") ?: System.currentTimeMillis()
                 val isFavorite = doc.getBoolean("isFavorite") ?: false
                 val isDeleted = doc.getBoolean("isDeleted") ?: false
+                val deletedAt = doc.getLong("deletedAt") ?: 0L
+                val driveFileId = doc.getString("driveFileId")
+                val contentHash = doc.getString("contentHash")
                 val remoteStorageRef = doc.getString("remoteStorageRef")
                 val accentColorHex = doc.getLong("accentColorHex") ?: 0xFFFEEA9F
 
@@ -251,16 +358,22 @@ class FirestoreNotesService(private val context: Context) {
                     fileName = fileName,
                     displayName = displayName,
                     localPath = "", // re-linked on download
+                    driveFileId = driveFileId,
                     fileSize = fileSize,
                     mimeType = mimeType,
+                    contentHash = contentHash,
                     pageCount = pageCount,
                     createdAt = createdAt,
                     updatedAt = updatedAt,
                     lastOpenedAt = lastOpenedAt,
                     lastOpenedPage = 0,
+                    lastSyncedAt = updatedAt,
                     isFavorite = isFavorite,
                     isDeleted = isDeleted,
+                    deletedAt = deletedAt,
                     syncStatus = "SYNCED",
+                    downloadState = "CLOUD_ONLY",
+                    uploadState = if (driveFileId != null) "UPLOADED" else "IDLE",
                     remoteStorageRef = remoteStorageRef,
                     accentColorHex = accentColorHex
                 )

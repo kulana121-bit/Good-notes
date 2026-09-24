@@ -153,7 +153,7 @@ fun TrashScreen(
         if (notes.isEmpty()) {
             EmptyState(
                 icon = Icons.Outlined.Delete,
-                title = "Trash is Empty",
+                title = "Trash is empty",
                 subtitle = "Deleted notes will stay here until permanently removed or restored."
             )
         } else {

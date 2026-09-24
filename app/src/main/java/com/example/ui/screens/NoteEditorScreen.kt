@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -228,6 +229,34 @@ fun NoteEditorScreen(
         }
     }
 
+    fun handleBackNavigation() {
+        if (isSketchModalOpen) {
+            isSketchModalOpen = false
+            return
+        }
+        if (isRecordingModalOpen) {
+            if (isRecordingActive) {
+                audioRecorder.cancelRecording()
+                isRecordingActive = false
+            }
+            isRecordingModalOpen = false
+            return
+        }
+        if (!isDeletedLocally) {
+            // Check if entirely blank
+            if (title.isBlank() && body.isBlank() && checklist.isEmpty() && attachedImageUri.isNullOrBlank() && attachedAudioUri.isNullOrBlank()) {
+                onDeleteNote?.invoke(note.id)
+            } else {
+                persist()
+            }
+        }
+        onBack()
+    }
+
+    BackHandler {
+        handleBackNavigation()
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -243,17 +272,7 @@ fun NoteEditorScreen(
                 isFavorite = note.isFavorite,
                 saveStatus = saveStatus,
                 sharedWith = note.sharedWith,
-                onBack = {
-                    if (!isDeletedLocally) {
-                        // Check if entirely blank
-                        if (title.isBlank() && body.isBlank() && checklist.isEmpty() && attachedImageUri.isNullOrBlank() && attachedAudioUri.isNullOrBlank()) {
-                            onDeleteNote?.invoke(note.id)
-                        } else {
-                            persist()
-                        }
-                    }
-                    onBack()
-                },
+                onBack = { handleBackNavigation() },
                 onDelete = {
                     isDeletedLocally = true
                     onDeleteNote?.invoke(note.id)

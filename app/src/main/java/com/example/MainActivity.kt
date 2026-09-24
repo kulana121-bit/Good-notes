@@ -2,10 +2,13 @@ package com.example
 
 import android.app.Application
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -16,8 +19,12 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -26,6 +33,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.example.ui.theme.OutfitFontFamily
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.components.NavigationSheet
 import com.example.ui.screens.DocumentsScreen
@@ -33,6 +43,7 @@ import com.example.ui.screens.FavoritesScreen
 import com.example.ui.screens.FoldersScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.NoteEditorScreen
+import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.PdfReaderScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SettingsScreen
@@ -93,17 +104,45 @@ fun NotesApp(
     val syncState by viewModel.syncState.collectAsState()
     val lastSyncTimestamp by viewModel.lastSyncTimestamp.collectAsState()
     val lastSyncReport by viewModel.lastSyncReport.collectAsState()
+    val pendingOperationsCount by viewModel.pendingOperationsCount.collectAsState()
 
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val isAutoSave by viewModel.isAutoSave.collectAsState()
     val selectedFont by viewModel.selectedFont.collectAsState()
     val baseTextSize by viewModel.baseTextSize.collectAsState()
     val defaultSortOrder by viewModel.defaultSortOrder.collectAsState()
+    val context = LocalContext.current
+
+    val driveAuthState by viewModel.driveAuthState.collectAsState()
+    val driveStorageInfo by viewModel.driveStorageInfo.collectAsState()
+    val isDriveTesting by viewModel.isDriveTesting.collectAsState()
+    val lastDriveTestReport by viewModel.lastDriveTestReport.collectAsState()
+
+    val isAutoCloudBackup by viewModel.isAutoCloudBackup.collectAsState()
+    val isCloudBackupWifiOnly by viewModel.isCloudBackupWifiOnly.collectAsState()
+    val isCloudBackupIncludeDocs by viewModel.isCloudBackupIncludeDocs.collectAsState()
+    val lastCloudBackupTimestamp by viewModel.lastCloudBackupTimestamp.collectAsState()
+    val cloudBackupProgress by viewModel.cloudBackupProgress.collectAsState()
+    val cloudRestoreProgress by viewModel.cloudRestoreProgress.collectAsState()
+    val availableCloudBackup by viewModel.availableCloudBackup.collectAsState()
+    val isOnboardingCompleted by viewModel.isOnboardingCompleted.collectAsState()
+
+    val driveAuthLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        viewModel.handleDriveAuthResult(result.data) { authRes ->
+            if (authRes.isSuccess) {
+                Log.i("MainActivity", "Google Drive authorization successful")
+            } else {
+                Log.w("MainActivity", "Google Drive authorization failed: ${authRes.exceptionOrNull()?.message}")
+            }
+        }
+    }
 
     var isSearchActive by remember { mutableStateOf(false) }
 
     // Intercept hardware back button
-    BackHandler(enabled = isSearchActive || currentDestination != NavDestination.HOME) {
+    BackHandler(enabled = (isOnboardingCompleted != false) && (isSearchActive || currentDestination != NavDestination.HOME)) {
         if (isSearchActive) {
             isSearchActive = false
         } else {
@@ -111,7 +150,12 @@ fun NotesApp(
         }
     }
 
-    Scaffold(modifier = Modifier.fillMaxSize()) { _ ->
+    if (isOnboardingCompleted == false) {
+        OnboardingScreen(
+            onComplete = { viewModel.completeOnboarding() }
+        )
+    } else {
+        Scaffold(modifier = Modifier.fillMaxSize()) { _ ->
         if (isSearchActive) {
             SearchScreen(
                 query = searchQuery,
@@ -178,7 +222,10 @@ fun NotesApp(
                             onNewNoteClick = { viewModel.openNoteEditor(null) },
                             onSaveVoiceNote = { audioFile, durationMs ->
                                 viewModel.createVoiceNote(audioFile, durationMs)
-                            }
+                            },
+                            syncState = syncState,
+                            lastSyncTimestamp = lastSyncTimestamp,
+                            onSyncClick = { viewModel.syncNow() }
                         )
                     }
 
@@ -242,6 +289,7 @@ fun NotesApp(
                             onToggleFavorite = { id -> viewModel.toggleDocumentFavorite(id) },
                             onDeleteDocument = { id -> viewModel.softDeleteDocument(id) },
                             onPermanentlyDeleteDocument = { id -> viewModel.permanentlyDeleteDocument(id) },
+                            onDownloadDocument = { doc -> viewModel.downloadDocument(doc) },
                             onBack = { viewModel.navigateBack() }
                         )
                     }
@@ -252,7 +300,8 @@ fun NotesApp(
                                 document = doc,
                                 onBack = { viewModel.navigateBack() },
                                 onPageChanged = { page -> viewModel.updateDocumentPage(doc.id, page) },
-                                onToggleFavorite = { id -> viewModel.toggleDocumentFavorite(id) }
+                                onToggleFavorite = { id -> viewModel.toggleDocumentFavorite(id) },
+                                onDownloadDocument = { d -> viewModel.downloadDocument(d) }
                             )
                         } ?: run {
                             viewModel.navigateTo(NavDestination.DOCUMENTS)
@@ -275,7 +324,8 @@ fun NotesApp(
                             syncState = syncState,
                             lastSyncTimestamp = lastSyncTimestamp,
                             lastSyncReport = lastSyncReport,
-                            onSignInWithGoogle = { cb -> viewModel.signInWithGoogle(onResult = cb) },
+                            pendingOperationsCount = pendingOperationsCount,
+                            onSignInWithGoogle = { cb -> viewModel.signInWithGoogle(activityContext = context, onResult = cb) },
                             onSignInWithEmail = { email, pass, cb -> viewModel.signInWithEmail(email, pass, cb) },
                             onSignUpWithEmail = { email, pass, name, cb -> viewModel.signUpWithEmail(email, pass, name, cb) },
                             onSignInAnonymously = { cb -> viewModel.signInAnonymously(cb) },
@@ -283,11 +333,72 @@ fun NotesApp(
                             onSyncNow = { viewModel.syncNow() },
                             onExportBackup = { uri, cb -> viewModel.exportBackup(uri, cb) },
                             onRestoreBackup = { uri, cb -> viewModel.restoreBackup(uri, cb) },
+                            driveAuthState = driveAuthState,
+                            driveStorageInfo = driveStorageInfo,
+                            isDriveTesting = isDriveTesting,
+                            lastDriveTestReport = lastDriveTestReport,
+                            onConnectDrive = {
+                                try {
+                                    driveAuthLauncher.launch(viewModel.getDriveAuthorizationIntent())
+                                } catch (e: Exception) {
+                                    Log.e("MainActivity", "Failed to launch Drive authorization intent", e)
+                                }
+                            },
+                            onDisconnectDrive = { viewModel.disconnectDrive() },
+                            onTestDriveConnection = { cb -> viewModel.testDriveConnection(cb) },
+                            onRefreshDrive = { viewModel.refreshDriveStatus() },
+                            isAutoCloudBackup = isAutoCloudBackup,
+                            onToggleAutoCloudBackup = { viewModel.setAutoCloudBackup(it) },
+                            isCloudBackupWifiOnly = isCloudBackupWifiOnly,
+                            onToggleCloudBackupWifiOnly = { viewModel.setCloudBackupWifiOnly(it) },
+                            isCloudBackupIncludeDocs = isCloudBackupIncludeDocs,
+                            onToggleCloudBackupIncludeDocs = { viewModel.setCloudBackupIncludeDocs(it) },
+                            lastCloudBackupTimestamp = lastCloudBackupTimestamp,
+                            cloudBackupProgress = cloudBackupProgress,
+                            cloudRestoreProgress = cloudRestoreProgress,
+                            onBackupToCloudNow = { cb -> viewModel.backupToCloudNow(cb) },
+                            onRestoreFromCloudNow = { cb -> viewModel.restoreFromCloudNow(cb) },
                             onBack = { viewModel.navigateBack() }
                         )
                     }
                 }
             }
+        }
+
+        // Automatic Restore Offer for Fresh Install / Empty Database
+        if (availableCloudBackup != null) {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissCloudBackupPrompt() },
+                title = {
+                    Text(
+                        text = "Cloud backup found",
+                        fontFamily = OutfitFontFamily,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Text(
+                        text = "Your NOTES data (${availableCloudBackup?.notes?.size ?: 0} notes, ${availableCloudBackup?.folders?.size ?: 0} folders) is available from your Google Drive backup. Would you like to restore it now?",
+                        fontFamily = OutfitFontFamily
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            viewModel.restoreFromCloudNow()
+                        },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Restore Notes", fontFamily = OutfitFontFamily)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.dismissCloudBackupPrompt() }) {
+                        Text("Not Now", fontFamily = OutfitFontFamily)
+                    }
+                },
+                shape = RoundedCornerShape(20.dp)
+            )
         }
 
         // Custom rounded Navigation Sheet
@@ -308,6 +419,7 @@ fun NotesApp(
             )
         }
     }
+}
 }
 
 // Retained for screenshot tests

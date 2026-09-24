@@ -1,15 +1,23 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.backup.BackupManager
+import com.example.data.backup.CloudBackupDto
+import com.example.data.backup.CloudBackupManager
+import com.example.data.backup.CloudBackupProgress
+import com.example.data.backup.CloudRestoreReport
 import com.example.data.backup.RestoreResultSummary
 import com.example.data.local.NotesDatabase
+import com.example.data.migration.DocumentMigrationState
 import com.example.data.model.ChecklistItem
 import com.example.data.model.Document
 import com.example.data.model.Folder
@@ -17,8 +25,15 @@ import com.example.data.model.Note
 import com.example.data.model.VisualCardType
 import com.example.data.remote.auth.FirebaseAuthService
 import com.example.data.remote.auth.UserSummary
+import com.example.data.remote.drive.DriveAuthState
+import com.example.data.remote.drive.DriveFolderStructure
+import com.example.data.remote.drive.DriveStorageInfo
+import com.example.data.remote.drive.DriveTestReport
+import com.example.data.remote.drive.GoogleDriveAuthManager
+import com.example.data.remote.drive.GoogleDriveService
 import com.example.data.repository.DocumentRepository
 import com.example.data.repository.NotesRepository
+import com.example.data.sync.NotesCloudSyncWorker
 import com.example.data.sync.NotesSyncWorker
 import com.example.data.sync.SyncManager
 import com.example.data.sync.SyncReport
@@ -31,6 +46,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -45,27 +61,20 @@ import java.util.UUID
 @OptIn(ExperimentalCoroutinesApi::class)
 class NotesViewModel(
     application: Application,
-    private val repository: NotesRepository = NotesRepository(NotesDatabase.getInstance(application)),
+    private val repository: NotesRepository = NotesRepository(NotesDatabase.getInstance(application), application),
     private val documentRepository: DocumentRepository = DocumentRepository(NotesDatabase.getInstance(application).documentDao()),
     private val backupManager: BackupManager = BackupManager(NotesDatabase.getInstance(application)),
     private val authService: FirebaseAuthService = FirebaseAuthService(application),
-    private val syncManager: SyncManager = SyncManager(application, NotesDatabase.getInstance(application), authService)
+    private val syncManager: SyncManager = SyncManager(application, NotesDatabase.getInstance(application), authService),
+    private val driveAuthManager: GoogleDriveAuthManager = GoogleDriveAuthManager(application),
+    private val driveService: GoogleDriveService = GoogleDriveService(application, driveAuthManager),
+    private val cloudBackupManager: CloudBackupManager = CloudBackupManager(application, NotesDatabase.getInstance(application), authService, driveService)
 ) : AndroidViewModel(application) {
 
     val audioPlayer: AudioPlayerManager = AudioPlayerManager(application)
 
-    init {
-        viewModelScope.launch {
-            repository.seedInitialDataIfNeeded()
-        }
-        viewModelScope.launch {
-            repository.isDarkMode().collect { persistedMode ->
-                _isDarkModeState.value = persistedMode
-            }
-        }
-        // Schedule 15-minute background periodic sync via WorkManager
-        NotesSyncWorker.schedulePeriodicSync(application)
-    }
+    val pendingOperationsCount = syncManager.pendingOperationsCount
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     // Single source of truth from Room Database
     private val rawNotes: StateFlow<List<Note>> = repository.allNotes
@@ -79,6 +88,9 @@ class NotesViewModel(
 
     val folders: StateFlow<List<Folder>> = repository.folders
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val isOnboardingCompleted: StateFlow<Boolean?> = repository.isOnboardingCompleted()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val activeNotesCount: StateFlow<Int> = repository.activeNotesCount
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
@@ -113,6 +125,7 @@ class NotesViewModel(
     val syncState: StateFlow<SyncState> = syncManager.syncState
     val lastSyncTimestamp: StateFlow<Long> = syncManager.lastSyncTimestamp
     val lastSyncReport: StateFlow<SyncReport?> = syncManager.lastSyncReport
+    val documentMigrationState: StateFlow<DocumentMigrationState> = syncManager.migrationManager.migrationState
 
     // Instant in-memory theme state synced with Room database for zero-latency switching
     private val _isDarkModeState = MutableStateFlow(true)
@@ -179,6 +192,84 @@ class NotesViewModel(
 
     private val _isHighlightActive = MutableStateFlow(false)
     val isHighlightActive: StateFlow<Boolean> = _isHighlightActive.asStateFlow()
+
+    // Google Drive Integration Foundation
+    private val _driveAuthState = MutableStateFlow<DriveAuthState>(DriveAuthState.Disconnected)
+    val driveAuthState: StateFlow<DriveAuthState> = _driveAuthState.asStateFlow()
+
+    private val _driveStorageInfo = MutableStateFlow<DriveStorageInfo?>(null)
+    val driveStorageInfo: StateFlow<DriveStorageInfo?> = _driveStorageInfo.asStateFlow()
+
+    private val _isDriveTesting = MutableStateFlow(false)
+    val isDriveTesting: StateFlow<Boolean> = _isDriveTesting.asStateFlow()
+
+    private val _lastDriveTestReport = MutableStateFlow<DriveTestReport?>(null)
+    val lastDriveTestReport: StateFlow<DriveTestReport?> = _lastDriveTestReport.asStateFlow()
+
+    // Unified Cloud Backup & Restore States
+    val cloudBackupProgress: StateFlow<CloudBackupProgress?> = cloudBackupManager.backupProgress
+    val cloudRestoreProgress: StateFlow<CloudBackupProgress?> = cloudBackupManager.restoreProgress
+
+    val isAutoCloudBackup: StateFlow<Boolean> = repository.isAutoCloudBackup()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    val isCloudBackupWifiOnly: StateFlow<Boolean> = repository.isCloudBackupWifiOnly()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val isCloudBackupIncludeDocs: StateFlow<Boolean> = repository.isCloudBackupIncludeDocs()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    val lastCloudBackupTimestamp: StateFlow<Long> = repository.getLastCloudBackupTimestamp()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+
+    val lastCloudBackupStatus: StateFlow<String> = repository.getLastCloudBackupStatus()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Never")
+
+    private val _availableCloudBackup = MutableStateFlow<CloudBackupDto?>(null)
+    val availableCloudBackup: StateFlow<CloudBackupDto?> = _availableCloudBackup.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            try {
+                repository.seedInitialDataIfNeeded()
+            } catch (t: Throwable) {
+                Log.w("NotesViewModel", "seedInitialDataIfNeeded warning: ${t.message}")
+            }
+            try {
+                checkForAvailableCloudBackup()
+            } catch (t: Throwable) {
+                Log.w("NotesViewModel", "checkForAvailableCloudBackup warning: ${t.message}")
+            }
+        }
+        viewModelScope.launch {
+            try {
+                repository.isDarkMode().collect { persistedMode ->
+                    _isDarkModeState.value = persistedMode
+                }
+            } catch (t: Throwable) {
+                Log.w("NotesViewModel", "DarkMode flow warning: ${t.message}")
+            }
+        }
+        // Schedule background periodic cloud sync via WorkManager
+        try {
+            NotesSyncWorker.schedulePeriodicSync(application)
+        } catch (t: Throwable) {
+            Log.w("NotesViewModel", "WorkManager schedule warning: ${t.message}")
+        }
+
+        // Initialize Google Drive connection status
+        try {
+            refreshDriveStatus()
+        } catch (t: Throwable) {
+            Log.w("NotesViewModel", "Google Drive status check warning: ${t.message}")
+        }
+    }
+
+    fun completeOnboarding() {
+        viewModelScope.launch {
+            repository.setOnboardingCompleted()
+        }
+    }
 
     fun selectFilter(filter: NotesFilter) {
         _activeFilter.value = filter
@@ -373,7 +464,24 @@ class NotesViewModel(
     fun importDocument(uri: Uri, onResult: (Result<Document>) -> Unit = {}) {
         viewModelScope.launch {
             val result = documentRepository.importPdf(uri, getApplication())
+            if (result.isSuccess) {
+                // Instantly trigger sync to Google Drive
+                syncManager.syncNow()
+            }
             onResult(result)
+        }
+    }
+
+    fun downloadDocument(document: Document, onComplete: (Result<Document>) -> Unit = {}) {
+        viewModelScope.launch {
+            val res = documentRepository.downloadDocumentFromDrive(document.id, getApplication())
+            if (res.isSuccess) {
+                val updated = res.getOrThrow()
+                if (_selectedDocument.value?.id == document.id) {
+                    _selectedDocument.value = updated
+                }
+            }
+            onComplete(res)
         }
     }
 
@@ -465,9 +573,9 @@ class NotesViewModel(
     }
 
     // Cloud Auth & Sync
-    fun signInWithGoogle(webClientId: String? = null, onResult: (Result<UserSummary>) -> Unit) {
+    fun signInWithGoogle(activityContext: Context? = null, webClientId: String? = null, onResult: (Result<UserSummary>) -> Unit) {
         viewModelScope.launch {
-            val result = authService.signInWithGoogle(webClientId)
+            val result = authService.signInWithGoogle(activityContext, webClientId)
             if (result.isSuccess) {
                 syncManager.syncNow()
             }
@@ -507,6 +615,13 @@ class NotesViewModel(
 
     fun signOut(onResult: (Result<Unit>) -> Unit = {}) {
         viewModelScope.launch {
+            // Cancel background cloud sync tasks to prevent stale sync
+            NotesCloudSyncWorker.cancelSync(getApplication())
+            // Clear cached folder identities
+            driveService.clearCache()
+            _driveAuthState.value = DriveAuthState.Disconnected
+            _driveStorageInfo.value = null
+
             val result = authService.signOut()
             onResult(result)
         }
@@ -517,6 +632,112 @@ class NotesViewModel(
             val result = syncManager.syncNow()
             onResult(result)
         }
+    }
+
+    // Google Drive Integration Foundation
+    fun refreshDriveStatus() {
+        viewModelScope.launch {
+            val authState = driveService.checkAuthorization()
+            _driveAuthState.value = authState
+            if (authState is DriveAuthState.Connected) {
+                val quotaResult = driveService.getStorageQuota()
+                _driveStorageInfo.value = quotaResult.getOrNull()
+            } else {
+                _driveStorageInfo.value = null
+            }
+        }
+    }
+
+    fun getDriveAuthorizationIntent(): Intent {
+        val preferredEmail = authService.currentUser.value?.email
+        return driveAuthManager.getAuthorizationIntent(preferredEmail)
+    }
+
+    fun handleDriveAuthResult(data: Intent?, onResult: (Result<DriveAuthState.Connected>) -> Unit) {
+        viewModelScope.launch {
+            val result = driveAuthManager.handleAuthorizationResult(data)
+            if (result.isSuccess) {
+                _driveAuthState.value = result.getOrThrow()
+                refreshDriveStatus()
+            } else {
+                _driveAuthState.value = DriveAuthState.Error(result.exceptionOrNull()?.localizedMessage ?: "Authorization failed")
+            }
+            onResult(result)
+        }
+    }
+
+    fun disconnectDrive(onResult: (Result<Unit>) -> Unit = {}) {
+        viewModelScope.launch {
+            val result = driveAuthManager.disconnect()
+            _driveAuthState.value = DriveAuthState.Disconnected
+            _driveStorageInfo.value = null
+            _lastDriveTestReport.value = null
+            onResult(result)
+        }
+    }
+
+    fun testDriveConnection(onResult: (Result<DriveTestReport>) -> Unit) {
+        viewModelScope.launch {
+            _isDriveTesting.value = true
+            val result = driveService.testDriveIntegration()
+            _isDriveTesting.value = false
+            _lastDriveTestReport.value = result.getOrNull()
+            if (result.isSuccess) {
+                refreshDriveStatus()
+            }
+            onResult(result)
+        }
+    }
+
+    // Unified Cloud Backup & Restore Methods
+    fun setAutoCloudBackup(enabled: Boolean) {
+        viewModelScope.launch { repository.setAutoCloudBackup(enabled) }
+    }
+
+    fun setCloudBackupWifiOnly(enabled: Boolean) {
+        viewModelScope.launch { repository.setCloudBackupWifiOnly(enabled) }
+    }
+
+    fun setCloudBackupIncludeDocs(enabled: Boolean) {
+        viewModelScope.launch { repository.setCloudBackupIncludeDocs(enabled) }
+    }
+
+    fun backupToCloudNow(onComplete: (Result<CloudBackupDto>) -> Unit = {}) {
+        viewModelScope.launch {
+            val includeDocs = repository.isCloudBackupIncludeDocs().firstOrNull() ?: true
+            val result = cloudBackupManager.backupToCloud(includeDocuments = includeDocs)
+            if (result.isSuccess) {
+                refreshDriveStatus()
+            }
+            onComplete(result)
+        }
+    }
+
+    fun restoreFromCloudNow(onComplete: (Result<CloudRestoreReport>) -> Unit = {}) {
+        viewModelScope.launch {
+            val result = cloudBackupManager.restoreFromCloud()
+            if (result.isSuccess) {
+                _availableCloudBackup.value = null
+                refreshDriveStatus()
+            }
+            onComplete(result)
+        }
+    }
+
+    fun checkForAvailableCloudBackup() {
+        viewModelScope.launch {
+            val count = repository.activeNotesCount.firstOrNull() ?: 0
+            if (count == 0 && driveService.checkAuthorization() is DriveAuthState.Connected) {
+                val backupRes = cloudBackupManager.checkForCloudBackup()
+                if (backupRes.isSuccess) {
+                    _availableCloudBackup.value = backupRes.getOrNull()
+                }
+            }
+        }
+    }
+
+    fun dismissCloudBackupPrompt() {
+        _availableCloudBackup.value = null
     }
 
     fun setSearchQuery(query: String) {
@@ -571,18 +792,24 @@ class NotesViewModel(
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 val db = NotesDatabase.getInstance(application)
-                val repository = NotesRepository(db)
+                val repository = NotesRepository(db, application)
                 val docRepository = DocumentRepository(db.documentDao())
                 val backupManager = BackupManager(db)
                 val authService = FirebaseAuthService(application)
                 val syncManager = SyncManager(application, db, authService)
+                val driveAuthManager = GoogleDriveAuthManager(application)
+                val driveService = GoogleDriveService(application, driveAuthManager)
+                val cloudBackupManager = CloudBackupManager(application, db, authService, driveService)
                 return NotesViewModel(
                     application = application,
                     repository = repository,
                     documentRepository = docRepository,
                     backupManager = backupManager,
                     authService = authService,
-                    syncManager = syncManager
+                    syncManager = syncManager,
+                    driveAuthManager = driveAuthManager,
+                    driveService = driveService,
+                    cloudBackupManager = cloudBackupManager
                 ) as T
             }
         }

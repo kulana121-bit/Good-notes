@@ -36,5 +36,8 @@ data class NoteEntity(
     val remoteId: String? = null,
     val imageUri: String? = null,
     val audioUri: String? = null,
-    val audioDurationMs: Long = 0L
+    val audioDurationMs: Long = 0L,
+    val version: Long = 1L,
+    val lastModifiedDeviceId: String = "",
+    val deletedAt: Long = 0L
 )

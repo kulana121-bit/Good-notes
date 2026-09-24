@@ -101,7 +101,7 @@ fun FavoritesScreen(
         if (favoriteNotes.isEmpty()) {
             EmptyState(
                 icon = Icons.Outlined.FavoriteBorder,
-                title = "No favorites yet",
+                title = "Favorite notes will appear here",
                 subtitle = "Tap the heart icon on any note card to save it here for quick access."
             )
         } else {

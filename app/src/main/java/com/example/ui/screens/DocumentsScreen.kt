@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -28,8 +29,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PictureAsPdf
@@ -38,6 +42,7 @@ import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -59,18 +64,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import coil.compose.AsyncImage
 import com.example.data.model.Document
 import com.example.ui.components.StaggeredAnimatedItem
 import com.example.ui.theme.NoteCoral
 import com.example.ui.theme.NoteYellow
 import com.example.ui.theme.OutfitFontFamily
 import kotlinx.coroutines.launch
+import java.io.File
 
 @Composable
 fun DocumentsScreen(
@@ -81,6 +89,7 @@ fun DocumentsScreen(
     onToggleFavorite: (String) -> Unit,
     onDeleteDocument: (String) -> Unit,
     onPermanentlyDeleteDocument: (String) -> Unit,
+    onDownloadDocument: (Document) -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -97,7 +106,7 @@ fun DocumentsScreen(
         if (uri != null) {
             onImportDocument(uri)
             coroutineScope.launch {
-                snackbarHostState.showSnackbar("PDF loaded from device")
+                snackbarHostState.showSnackbar("PDF imported & scheduled for Google Drive sync")
             }
         }
     }
@@ -112,46 +121,64 @@ fun DocumentsScreen(
                 isScanning = false
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar(
-                        if (count > 0) "Found $count PDF documents on device" else "No new PDFs found on device"
+                        if (count > 0) "Found and indexed $count PDF documents from device"
+                        else "No new PDF documents discovered on device"
                     )
                 }
             }
         } else {
             coroutineScope.launch {
-                snackbarHostState.showSnackbar("Storage permission allows finding all device PDFs automatically")
+                snackbarHostState.showSnackbar("Storage access permission required to scan device")
             }
         }
     }
 
     fun triggerDeviceScan() {
-        val permissionsToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
-        } else {
-            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
-
-        val allGranted = permissionsToRequest.all {
-            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-        }
-
-        if (allGranted) {
-            isScanning = true
-            onScanDeviceDocuments { count ->
-                isScanning = false
-                coroutineScope.launch {
-                    snackbarHostState.showSnackbar(
-                        if (count > 0) "Found $count PDF documents on device" else "All device PDFs up to date"
-                    )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val hasPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+            if (hasPerm) {
+                isScanning = true
+                onScanDeviceDocuments { count ->
+                    isScanning = false
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar(
+                            if (count > 0) "Found and indexed $count PDF documents from device"
+                            else "No new PDF documents discovered on device"
+                        )
+                    }
                 }
+            } else {
+                permissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.READ_MEDIA_IMAGES,
+                        Manifest.permission.READ_MEDIA_VIDEO
+                    )
+                )
             }
         } else {
-            permissionLauncher.launch(permissionsToRequest)
+            val hasPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            if (hasPerm) {
+                isScanning = true
+                onScanDeviceDocuments { count ->
+                    isScanning = false
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar(
+                            if (count > 0) "Found and indexed $count PDF documents from device"
+                            else "No new PDF documents discovered on device"
+                        )
+                    }
+                }
+            } else {
+                permissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
+            }
         }
     }
 
-    // Auto scan once when entering screen
+    // Auto-scan on first entrance if the document library is empty
     LaunchedEffect(Unit) {
-        triggerDeviceScan()
+        if (documents.isEmpty()) {
+            onScanDeviceDocuments {}
+        }
     }
 
     Box(
@@ -168,44 +195,38 @@ fun DocumentsScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     IconButton(
                         onClick = onBack,
                         modifier = Modifier
-                            .size(42.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
                             .testTag("documents_back_button")
+                            .size(44.dp)
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
                             contentDescription = "Back",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(20.dp)
+                            tint = MaterialTheme.colorScheme.onBackground
                         )
                     }
 
-                    Spacer(modifier = Modifier.size(16.dp))
-
                     Column {
                         Text(
-                            text = "Documents",
-                            style = MaterialTheme.typography.displayMedium.copy(
+                            text = "PDF Documents",
+                            style = MaterialTheme.typography.titleLarge.copy(
                                 fontFamily = OutfitFontFamily,
-                                fontSize = 28.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onBackground
                             )
                         )
                         Text(
-                            text = "${documents.size} ${if (documents.size == 1) "document" else "documents"} • Direct Device Storage",
+                            text = "${documents.size} ${if (documents.size == 1) "document" else "documents"} • Drive Sync",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 fontFamily = OutfitFontFamily,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
@@ -214,63 +235,63 @@ fun DocumentsScreen(
                     }
                 }
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Sync / Scan button
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // Rescan button
                     IconButton(
-                        onClick = { triggerDeviceScan() },
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                        onClick = {
+                            if (!isScanning) {
+                                triggerDeviceScan()
+                            }
+                        },
+                        modifier = Modifier.size(40.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Refresh,
-                            contentDescription = "Scan Device PDFs",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        if (isScanning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Outlined.Refresh,
+                                contentDescription = "Scan Device for PDFs",
+                                tint = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
                     }
 
-                    // Import Button
+                    // Import button
                     Button(
                         onClick = {
                             pdfPickerLauncher.launch(arrayOf("application/pdf"))
                         },
                         shape = RoundedCornerShape(20.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary,
                             contentColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                        modifier = Modifier.testTag("import_document_button")
+                        )
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.FileUpload,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
+                        Icon(
+                            imageVector = Icons.Outlined.FileUpload,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Import PDF",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = OutfitFontFamily,
+                                fontWeight = FontWeight.SemiBold
                             )
-                            Text(
-                                text = "Open PDF",
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontFamily = OutfitFontFamily,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            )
-                        }
+                        )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
-            // Notice about direct storage & real-time sync
+            // Notice about app storage & Google Drive sync
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -280,7 +301,7 @@ fun DocumentsScreen(
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text(
-                    text = "📄 PDFs are read directly from device storage without copies. Deleting permanently removes the file from device.",
+                    text = "📁 Documents are stored in app storage & synced with Google Drive (NOTES/Documents).",
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = OutfitFontFamily,
                         fontSize = 11.5.sp,
@@ -318,7 +339,7 @@ fun DocumentsScreen(
                         }
 
                         Text(
-                            text = "No PDF Documents Found",
+                            text = "No documents yet",
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontFamily = OutfitFontFamily,
                                 fontWeight = FontWeight.Bold,
@@ -327,7 +348,7 @@ fun DocumentsScreen(
                         )
 
                         Text(
-                            text = "Auto-scan your device or select a PDF file directly to annotate and read on digital paper.",
+                            text = "Import a PDF file or scan your device to read, annotate, and sync directly with Google Drive.",
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontFamily = OutfitFontFamily,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
@@ -377,6 +398,7 @@ fun DocumentsScreen(
                                 doc = doc,
                                 onClick = { onDocumentClick(doc) },
                                 onToggleFavorite = { onToggleFavorite(doc.id) },
+                                onDownload = { onDownloadDocument(doc) },
                                 onDelete = { documentToDelete = doc }
                             )
                         }
@@ -385,7 +407,7 @@ fun DocumentsScreen(
             }
         }
 
-        // Delete confirmation dialog explaining actual deletion from storage
+        // Delete confirmation dialog
         documentToDelete?.let { doc ->
             AlertDialog(
                 onDismissRequest = { documentToDelete = null },
@@ -398,7 +420,7 @@ fun DocumentsScreen(
                 },
                 text = {
                     Text(
-                        text = "Are you sure you want to delete \"${doc.displayName}\"? This will permanently delete the actual PDF file from your device.",
+                        text = "Are you sure you want to delete \"${doc.displayName}\"? This will permanently delete the document from local storage and Google Drive.",
                         fontFamily = OutfitFontFamily
                     )
                 },
@@ -409,12 +431,12 @@ fun DocumentsScreen(
                             documentToDelete = null
                             onPermanentlyDeleteDocument(id)
                             coroutineScope.launch {
-                                snackbarHostState.showSnackbar("Document deleted from device storage")
+                                snackbarHostState.showSnackbar("Document permanently deleted")
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = NoteCoral)
                     ) {
-                        Text("Delete from Device", color = Color.White, fontFamily = OutfitFontFamily)
+                        Text("Delete", color = Color.White, fontFamily = OutfitFontFamily)
                     }
                 },
                 dismissButton = {
@@ -439,6 +461,7 @@ fun DocumentCardItem(
     doc: Document,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onDownload: () -> Unit = {},
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -464,22 +487,33 @@ fun DocumentCardItem(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier.weight(1f)
             ) {
+                // Document Thumbnail or Stylish Icon
+                val hasThumb = doc.thumbnailPath != null && File(doc.thumbnailPath).exists()
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(52.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .background(doc.accentColor),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.PictureAsPdf,
-                        contentDescription = "PDF",
-                        tint = Color(0xFF141414),
-                        modifier = Modifier.size(26.dp)
-                    )
+                    if (hasThumb) {
+                        AsyncImage(
+                            model = File(doc.thumbnailPath!!),
+                            contentDescription = doc.displayName,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Outlined.PictureAsPdf,
+                            contentDescription = "PDF",
+                            tint = Color(0xFF141414),
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
 
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = doc.displayName,
                         style = MaterialTheme.typography.titleSmall.copy(
@@ -494,13 +528,105 @@ fun DocumentCardItem(
                     Spacer(modifier = Modifier.height(3.dp))
 
                     Text(
-                        text = "${doc.fileSizeFormatted} • ${doc.pageCount} ${if (doc.pageCount == 1) "page" else "pages"} • ${doc.lastOpenedAtFormatted}",
+                        text = "${doc.fileSizeFormatted} • ${doc.pageCount} ${if (doc.pageCount == 1) "page" else "pages"}",
                         style = MaterialTheme.typography.bodySmall.copy(
                             fontFamily = OutfitFontFamily,
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     )
+
+                    Spacer(modifier = Modifier.height(3.dp))
+
+                    // Sync & Drive status badge
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        when {
+                            doc.downloadState == "DOWNLOADING" -> {
+                                CircularProgressIndicator(modifier = Modifier.size(11.dp), strokeWidth = 1.5.dp)
+                                Text(
+                                    text = "Downloading...",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                )
+                            }
+                            doc.uploadState == "UPLOADING" -> {
+                                CircularProgressIndicator(modifier = Modifier.size(11.dp), strokeWidth = 1.5.dp)
+                                Text(
+                                    text = "Uploading to Drive...",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                )
+                            }
+                            doc.isCloudOnly -> {
+                                Icon(
+                                    imageVector = Icons.Outlined.CloudDownload,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = "Available in Drive (Tap to download)",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                )
+                            }
+                            doc.uploadState == "FAILED" -> {
+                                Icon(
+                                    imageVector = Icons.Outlined.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = NoteCoral,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = "Upload failed",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontSize = 11.sp,
+                                        color = NoteCoral
+                                    )
+                                )
+                            }
+                            doc.driveFileId != null -> {
+                                Icon(
+                                    imageVector = Icons.Outlined.CloudDone,
+                                    contentDescription = null,
+                                    tint = Color(0xFF558B2F),
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = "Drive Synced",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF558B2F)
+                                    )
+                                )
+                            }
+                            else -> {
+                                Text(
+                                    text = "Local document",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -537,6 +663,23 @@ fun DocumentCardItem(
                         expanded = isMenuOpen,
                         onDismissRequest = { isMenuOpen = false }
                     ) {
+                        if (doc.isCloudOnly) {
+                            DropdownMenuItem(
+                                text = { Text("Download to Device", fontFamily = OutfitFontFamily) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Outlined.CloudDownload,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                onClick = {
+                                    isMenuOpen = false
+                                    onDownload()
+                                }
+                            )
+                        }
+
                         DropdownMenuItem(
                             text = { Text("Open Reader", fontFamily = OutfitFontFamily) },
                             onClick = {
@@ -544,8 +687,9 @@ fun DocumentCardItem(
                                 onClick()
                             }
                         )
+
                         DropdownMenuItem(
-                            text = { Text("Delete from Device", fontFamily = OutfitFontFamily, color = MaterialTheme.colorScheme.error) },
+                            text = { Text("Delete Document", fontFamily = OutfitFontFamily, color = MaterialTheme.colorScheme.error) },
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Outlined.DeleteForever,

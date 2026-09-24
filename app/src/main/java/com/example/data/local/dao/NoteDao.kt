@@ -46,10 +46,10 @@ interface NoteDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNotes(notes: List<NoteEntity>)
 
-    @Query("UPDATE notes SET isDeleted = 1, updatedAt = :timestamp WHERE id = :id")
+    @Query("UPDATE notes SET isDeleted = 1, updatedAt = :timestamp, deletedAt = :timestamp, syncStatus = 'PENDING_DELETE' WHERE id = :id")
     suspend fun softDeleteNote(id: String, timestamp: Long = System.currentTimeMillis())
 
-    @Query("UPDATE notes SET isDeleted = 0, updatedAt = :timestamp WHERE id = :id")
+    @Query("UPDATE notes SET isDeleted = 0, updatedAt = :timestamp, deletedAt = 0, syncStatus = 'PENDING_UPLOAD' WHERE id = :id")
     suspend fun restoreNote(id: String, timestamp: Long = System.currentTimeMillis())
 
     @Query("DELETE FROM notes WHERE id = :id")
@@ -58,13 +58,13 @@ interface NoteDao {
     @Query("DELETE FROM notes WHERE isDeleted = 1")
     suspend fun emptyTrash()
 
-    @Query("UPDATE notes SET isFavorite = :isFavorite, updatedAt = :timestamp WHERE id = :id")
+    @Query("UPDATE notes SET isFavorite = :isFavorite, updatedAt = :timestamp, syncStatus = 'PENDING_UPLOAD' WHERE id = :id")
     suspend fun setFavorite(id: String, isFavorite: Boolean, timestamp: Long = System.currentTimeMillis())
 
-    @Query("UPDATE notes SET folder = :newFolderName, updatedAt = :timestamp WHERE folder = :oldFolderName")
+    @Query("UPDATE notes SET folder = :newFolderName, updatedAt = :timestamp, syncStatus = 'PENDING_UPLOAD' WHERE folder = :oldFolderName")
     suspend fun renameFolderInNotes(oldFolderName: String, newFolderName: String, timestamp: Long = System.currentTimeMillis())
 
-    @Query("UPDATE notes SET folder = :targetFolderName, updatedAt = :timestamp WHERE id = :noteId")
+    @Query("UPDATE notes SET folder = :targetFolderName, updatedAt = :timestamp, syncStatus = 'PENDING_UPLOAD' WHERE id = :noteId")
     suspend fun moveNoteToFolder(noteId: String, targetFolderName: String, timestamp: Long = System.currentTimeMillis())
 
     @Query("SELECT COUNT(*) FROM notes WHERE isDeleted = 0")

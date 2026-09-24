@@ -45,19 +45,7 @@ class NotesSyncWorker(
         private const val WORK_NAME = "NotesPeriodicSyncWorker"
 
         fun schedulePeriodicSync(context: Context) {
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .build()
-
-            val syncRequest = PeriodicWorkRequestBuilder<NotesSyncWorker>(15, TimeUnit.MINUTES)
-                .setConstraints(constraints)
-                .build()
-
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
-                syncRequest
-            )
+            NotesCloudSyncWorker.schedulePeriodicSync(context)
         }
     }
 }

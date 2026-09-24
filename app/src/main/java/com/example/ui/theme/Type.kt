@@ -8,12 +8,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.example.R
 
-val OutfitFontFamily = FontFamily(
-    Font(R.font.outfit, FontWeight.Normal),
-    Font(R.font.outfit, FontWeight.Medium),
-    Font(R.font.outfit, FontWeight.SemiBold),
-    Font(R.font.outfit, FontWeight.Bold)
-)
+val OutfitFontFamily = try {
+    FontFamily(Font(R.font.outfit))
+} catch (_: Throwable) {
+    FontFamily.Default
+}
+
 
 val NotesTypography = Typography(
     displayLarge = TextStyle(

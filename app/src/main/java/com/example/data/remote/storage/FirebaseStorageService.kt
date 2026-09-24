@@ -17,12 +17,19 @@ class FirebaseStorageService(private val context: Context) {
     private val isFirebaseInitialized: Boolean
         get() = try {
             FirebaseApp.getApps(context).isNotEmpty()
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             false
         }
 
     private val storage: FirebaseStorage?
-        get() = if (isFirebaseInitialized) FirebaseStorage.getInstance() else null
+        get() = if (isFirebaseInitialized) {
+            try {
+                FirebaseStorage.getInstance()
+            } catch (t: Throwable) {
+                Log.w(tag, "FirebaseStorage.getInstance failed: ${t.message}")
+                null
+            }
+        } else null
 
     suspend fun uploadPdfDocument(
         uid: String,

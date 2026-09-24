@@ -27,21 +27,30 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CloudSync
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ColorLens
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.Email
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.Nightlight
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.WbSunny
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -49,6 +58,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -78,8 +88,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.backup.CloudBackupDto
+import com.example.data.backup.CloudBackupProgress
+import com.example.data.backup.CloudRestoreReport
 import com.example.data.backup.RestoreResultSummary
 import com.example.data.remote.auth.UserSummary
+import com.example.data.remote.drive.DriveAuthState
+import com.example.data.remote.drive.DriveStorageInfo
+import com.example.data.remote.drive.DriveTestReport
 import com.example.data.sync.SyncReport
 import com.example.data.sync.SyncState
 import com.example.ui.theme.NoteCoral
@@ -107,6 +123,7 @@ fun SettingsScreen(
     syncState: SyncState = SyncState.SYNCED,
     lastSyncTimestamp: Long = 0L,
     lastSyncReport: SyncReport? = null,
+    pendingOperationsCount: Int = 0,
     onSignInWithGoogle: ((Result<UserSummary>) -> Unit) -> Unit = {},
     onSignInWithEmail: (email: String, pass: String, (Result<UserSummary>) -> Unit) -> Unit = { _, _, _ -> },
     onSignUpWithEmail: (email: String, pass: String, name: String, (Result<UserSummary>) -> Unit) -> Unit = { _, _, _, _ -> },
@@ -115,6 +132,25 @@ fun SettingsScreen(
     onSyncNow: () -> Unit = {},
     onExportBackup: (Uri, (Result<Int>) -> Unit) -> Unit = { _, _ -> },
     onRestoreBackup: (Uri, (Result<RestoreResultSummary>) -> Unit) -> Unit = { _, _ -> },
+    driveAuthState: DriveAuthState = DriveAuthState.Disconnected,
+    driveStorageInfo: DriveStorageInfo? = null,
+    isDriveTesting: Boolean = false,
+    lastDriveTestReport: DriveTestReport? = null,
+    onConnectDrive: () -> Unit = {},
+    onDisconnectDrive: () -> Unit = {},
+    onTestDriveConnection: ((Result<DriveTestReport>) -> Unit) -> Unit = {},
+    onRefreshDrive: () -> Unit = {},
+    isAutoCloudBackup: Boolean = true,
+    onToggleAutoCloudBackup: (Boolean) -> Unit = {},
+    isCloudBackupWifiOnly: Boolean = false,
+    onToggleCloudBackupWifiOnly: (Boolean) -> Unit = {},
+    isCloudBackupIncludeDocs: Boolean = true,
+    onToggleCloudBackupIncludeDocs: (Boolean) -> Unit = {},
+    lastCloudBackupTimestamp: Long = 0L,
+    cloudBackupProgress: CloudBackupProgress? = null,
+    cloudRestoreProgress: CloudBackupProgress? = null,
+    onBackupToCloudNow: (((Result<CloudBackupDto>) -> Unit) -> Unit)? = null,
+    onRestoreFromCloudNow: (((Result<CloudRestoreReport>) -> Unit) -> Unit)? = null,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -356,6 +392,25 @@ fun SettingsScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 )
+                                if (pendingOperationsCount > 0) {
+                                    Text(
+                                        text = "$pendingOperationsCount changes queued (offline-first)",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = OutfitFontFamily,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    )
+                                }
+                                if (lastSyncReport != null && lastSyncReport.conflictsResolved > 0) {
+                                    Text(
+                                        text = "${lastSyncReport.conflictsResolved} conflicts safely resolved",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = OutfitFontFamily,
+                                            color = NoteCoral
+                                        )
+                                    )
+                                }
                             }
 
                             OutlinedButton(
@@ -379,6 +434,535 @@ fun SettingsScreen(
                                     Text("Sync Now", fontFamily = OutfitFontFamily, fontSize = 13.sp)
                                 }
                             }
+                        }
+                    }
+                }
+
+                // Google Drive Storage Section (Phase 2 Foundation)
+                SettingsSection(title = "Google Drive (User-Owned Storage)", icon = Icons.Outlined.Cloud) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        when (driveAuthState) {
+                            is DriveAuthState.Connected -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clip(CircleShape)
+                                                .background(NoteMint.copy(alpha = 0.2f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.CloudDone,
+                                                contentDescription = null,
+                                                tint = NoteMint,
+                                                modifier = Modifier.size(22.dp)
+                                            )
+                                        }
+                                        Column {
+                                            Text(
+                                                text = "Connected to Google Drive",
+                                                style = MaterialTheme.typography.titleSmall.copy(
+                                                    fontFamily = OutfitFontFamily,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            )
+                                            Text(
+                                                text = driveAuthState.accountEmail,
+                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                    fontFamily = OutfitFontFamily,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            )
+                                        }
+                                    }
+
+                                    IconButton(
+                                        onClick = onDisconnectDrive,
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Logout,
+                                            contentDescription = "Disconnect Drive",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(14.dp))
+
+                                // Storage Quota Information
+                                if (driveStorageInfo != null) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                                            .padding(12.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Drive Storage Usage",
+                                                style = MaterialTheme.typography.labelMedium.copy(
+                                                    fontFamily = OutfitFontFamily,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            )
+                                            Text(
+                                                text = "${driveStorageInfo.usageFormatted} / ${driveStorageInfo.limitFormatted}",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontFamily = OutfitFontFamily,
+                                                    fontWeight = FontWeight.Medium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            )
+                                        }
+
+                                        driveStorageInfo.usagePercentage?.let { pct ->
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            LinearProgressIndicator(
+                                                progress = { pct },
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(6.dp)
+                                                    .clip(RoundedCornerShape(3.dp)),
+                                                color = if (pct > 0.9f) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                                trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "Target folders: NOTES/Backup & NOTES/Documents",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontFamily = OutfitFontFamily,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                                fontSize = 11.sp
+                                            )
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                }
+
+                                // Test Connection Button
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Drive Connectivity Test",
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFamily = OutfitFontFamily,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        )
+                                        Text(
+                                            text = "Validates NOTES folder hierarchy, quota & file I/O",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontFamily = OutfitFontFamily,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontSize = 11.sp
+                                            )
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            onTestDriveConnection { res ->
+                                                coroutineScope.launch {
+                                                    val report = res.getOrNull()
+                                                    if (report != null && report.success) {
+                                                        snackbarHostState.showSnackbar("Drive Test Passed! Folders & temporary file verified.")
+                                                    } else {
+                                                        val err = report?.message ?: res.exceptionOrNull()?.localizedMessage ?: "Test failed"
+                                                        snackbarHostState.showSnackbar("Drive Test: $err")
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        enabled = !isDriveTesting,
+                                        shape = RoundedCornerShape(14.dp)
+                                    ) {
+                                        if (isDriveTesting) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                strokeWidth = 2.dp,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Outlined.PlayArrow,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Test", fontFamily = OutfitFontFamily, fontSize = 13.sp)
+                                        }
+                                    }
+                                }
+                            }
+
+                            is DriveAuthState.Authorizing -> {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                    Text(
+                                        text = "Connecting to Google Drive...",
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = OutfitFontFamily)
+                                    )
+                                }
+                            }
+
+                            else -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "User-Owned Drive Storage",
+                                            style = MaterialTheme.typography.titleSmall.copy(
+                                                fontFamily = OutfitFontFamily,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        )
+                                        Text(
+                                            text = "Authorize access to store your backups and PDF documents directly in your personal Google Drive account.",
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFamily = OutfitFontFamily,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    Button(
+                                        onClick = onConnectDrive,
+                                        shape = RoundedCornerShape(16.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Cloud,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Connect Drive",
+                                            style = MaterialTheme.typography.labelMedium.copy(
+                                                fontFamily = OutfitFontFamily,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        )
+                                    }
+                                }
+
+                                if (driveAuthState is DriveAuthState.Error) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = driveAuthState.message,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = OutfitFontFamily,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Cloud Backup & Restore Section (Phase 3)
+                val lastBackupFormatted = remember(lastCloudBackupTimestamp) {
+                    if (lastCloudBackupTimestamp > 0L) {
+                        SimpleDateFormat("MMM d, yyyy 'at' h:mm a", Locale.getDefault()).format(Date(lastCloudBackupTimestamp))
+                    } else "Never"
+                }
+
+                SettingsSection(title = "Cloud Backup", icon = Icons.Outlined.CloudUpload) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        // Backup Status Header
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Status: Last backup",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                                Text(
+                                    text = lastBackupFormatted,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        color = if (lastCloudBackupTimestamp > 0L) NoteMint else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                )
+                            }
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        onBackupToCloudNow?.invoke { res ->
+                                            coroutineScope.launch {
+                                                if (res.isSuccess) {
+                                                    val dto = res.getOrNull()
+                                                    snackbarHostState.showSnackbar("Cloud Backup complete ✓ (${dto?.notes?.size ?: 0} notes)")
+                                                } else {
+                                                    snackbarHostState.showSnackbar("Backup error: ${res.exceptionOrNull()?.localizedMessage ?: "Failed"}")
+                                                }
+                                            }
+                                        }
+                                    },
+                                    enabled = driveAuthState is DriveAuthState.Connected && cloudBackupProgress?.isCompleted != false,
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.CloudUpload,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Back Up Now", fontFamily = OutfitFontFamily, fontSize = 12.sp)
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        onRestoreFromCloudNow?.invoke { res ->
+                                            coroutineScope.launch {
+                                                if (res.isSuccess) {
+                                                    val rep = res.getOrNull()
+                                                    snackbarHostState.showSnackbar("Cloud Restore complete ✓ (${rep?.notesRestored ?: 0} notes restored)")
+                                                } else {
+                                                    snackbarHostState.showSnackbar("Restore error: ${res.exceptionOrNull()?.localizedMessage ?: "Failed"}")
+                                                }
+                                            }
+                                        }
+                                    },
+                                    enabled = driveAuthState is DriveAuthState.Connected && cloudRestoreProgress?.isCompleted != false,
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.FileDownload,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Restore Backup", fontFamily = OutfitFontFamily, fontSize = 12.sp)
+                                }
+                            }
+                        }
+
+                        // Progress display for active backup
+                        if (cloudBackupProgress != null && !cloudBackupProgress.isCompleted) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                    .padding(10.dp)
+                            ) {
+                                Text(
+                                    text = cloudBackupProgress.status,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                LinearProgressIndicator(
+                                    progress = { cloudBackupProgress.progress },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp)),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            }
+                        }
+
+                        // Progress display for active restore
+                        if (cloudRestoreProgress != null && !cloudRestoreProgress.isCompleted) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                    .padding(10.dp)
+                            ) {
+                                Text(
+                                    text = cloudRestoreProgress.status,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                LinearProgressIndicator(
+                                    progress = { cloudRestoreProgress.progress },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp)),
+                                    color = NoteMint,
+                                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Automatic Backup Setting Switch
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onToggleAutoCloudBackup(!isAutoCloudBackup) },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Automatic Backup",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                                Text(
+                                    text = "Periodically back up notes & folders to your Google Drive in background",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                )
+                            }
+                            Switch(
+                                checked = isAutoCloudBackup,
+                                onCheckedChange = onToggleAutoCloudBackup,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = MaterialTheme.colorScheme.surface,
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Backup on Wi-Fi Only Switch
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onToggleCloudBackupWifiOnly(!isCloudBackupWifiOnly) },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Backup on Wi-Fi Only",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                                Text(
+                                    text = "Avoid cellular data usage for background cloud backups",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                )
+                            }
+                            Switch(
+                                checked = isCloudBackupWifiOnly,
+                                onCheckedChange = onToggleCloudBackupWifiOnly,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = MaterialTheme.colorScheme.surface,
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Include Documents Switch
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onToggleCloudBackupIncludeDocs(!isCloudBackupIncludeDocs) },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Include Documents & PDFs",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                                Text(
+                                    text = "Upload PDF and document files into NOTES/Documents/ on Drive",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = OutfitFontFamily,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                )
+                            }
+                            Switch(
+                                checked = isCloudBackupIncludeDocs,
+                                onCheckedChange = onToggleCloudBackupIncludeDocs,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = MaterialTheme.colorScheme.surface,
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                                )
+                            )
                         }
                     }
                 }
@@ -598,7 +1182,12 @@ fun SettingsScreen(
                                 isAuthDialogOpen = false
                                 snackbarHostState.showSnackbar("Welcome, ${result.getOrNull()?.displayName ?: "User"}!")
                             } else {
-                                snackbarHostState.showSnackbar("Google Sign-In: ${result.exceptionOrNull()?.localizedMessage ?: "Failed"}")
+                                val ex = result.exceptionOrNull()
+                                val isCancelled = ex is androidx.credentials.exceptions.GetCredentialCancellationException ||
+                                        ex?.message?.contains("cancel", ignoreCase = true) == true
+                                if (!isCancelled) {
+                                    snackbarHostState.showSnackbar("Google Sign-In: ${ex?.localizedMessage ?: "Failed"}")
+                                }
                             }
                         }
                     }

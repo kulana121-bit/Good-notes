@@ -39,9 +39,14 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.NoteAdd
 import androidx.compose.material.icons.outlined.PictureAsPdf
+import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material.icons.outlined.WarningAmber
+import com.example.data.sync.SyncState
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -109,6 +114,9 @@ fun HomeScreen(
     onSearchClick: () -> Unit,
     onNewNoteClick: () -> Unit,
     onSaveVoiceNote: (File, Long) -> Unit,
+    syncState: SyncState = SyncState.SYNCED,
+    lastSyncTimestamp: Long = 0L,
+    onSyncClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -191,6 +199,63 @@ fun HomeScreen(
                     onMenuClick = onMenuClick,
                     onSearchClick = onSearchClick
                 )
+
+                // Subtle, non-intrusive Cloud Sync & Offline Indicator Pill
+                if (syncState != SyncState.SIGN_IN_REQUIRED) {
+                    val (icon, text, tintColor) = when (syncState) {
+                        SyncState.OFFLINE -> Triple(
+                            Icons.Outlined.CloudOff,
+                            "Offline • Saved on this device",
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        )
+                        SyncState.SYNCING -> Triple(
+                            Icons.Outlined.Sync,
+                            "Syncing...",
+                            MaterialTheme.colorScheme.primary
+                        )
+                        SyncState.ERROR -> Triple(
+                            Icons.Outlined.WarningAmber,
+                            "Sync issue • Tap to retry",
+                            Color(0xFFE57373)
+                        )
+                        SyncState.SYNCED -> Triple(
+                            Icons.Outlined.Check,
+                            "Synced • ${formatRelativeSyncTime(lastSyncTimestamp)}",
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                        )
+                        else -> Triple(null, null, Color.Unspecified)
+                    }
+
+                    if (text != null && icon != null) {
+                        Row(
+                            modifier = Modifier
+                                .padding(horizontal = 24.dp, vertical = 4.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                .clickable(enabled = syncState == SyncState.ERROR) { onSyncClick() }
+                                .padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = null,
+                                tint = tintColor,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = text,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = OutfitFontFamily,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    color = tintColor
+                                )
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
             }
 
             // Horizontal Filter Pills Row
@@ -280,7 +345,7 @@ fun HomeScreen(
                 item {
                     EmptyState(
                         icon = Icons.Outlined.NoteAdd,
-                        title = "No notes found",
+                        title = "No notes yet",
                         subtitle = "Tap + to write a note or tap 🎙️ to record a voice note.",
                         actionLabel = "Create Note",
                         onActionClick = onNewNoteClick
@@ -543,3 +608,17 @@ fun HomeScreen(
         )
     }
 }
+
+private fun formatRelativeSyncTime(timestamp: Long): String {
+    if (timestamp <= 0L) return "Just now"
+    val diff = System.currentTimeMillis() - timestamp
+    val minutes = diff / 60000
+    return when {
+        minutes < 1 -> "Just now"
+        minutes == 1L -> "1 min ago"
+        minutes < 60 -> "$minutes min ago"
+        minutes < 1440 -> "${minutes / 60}h ago"
+        else -> "Earlier"
+    }
+}
+
