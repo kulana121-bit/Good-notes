@@ -25,50 +25,40 @@ android {
 
   signingConfigs {
     create("release") {
-      val envKeystoreFile = System.getenv("KEYSTORE_FILE")
+      val envReleaseKeystore = System.getenv("RELEASE_KEYSTORE_FILE")
       val rootReleaseKeystore = file("${rootDir}/release.keystore")
       val appReleaseKeystore = file("release.keystore")
-      val rootDebugKeystore = file("${rootDir}/debug.keystore")
-      val appDebugKeystore = file("debug.keystore")
 
       val targetKeystore = when {
-        envKeystoreFile != null && file(envKeystoreFile).exists() -> file(envKeystoreFile)
+        envReleaseKeystore != null && file(envReleaseKeystore).exists() -> file(envReleaseKeystore)
         rootReleaseKeystore.exists() -> rootReleaseKeystore
         appReleaseKeystore.exists() -> appReleaseKeystore
-        rootDebugKeystore.exists() -> rootDebugKeystore
-        appDebugKeystore.exists() -> appDebugKeystore
         else -> null
       }
 
       if (targetKeystore != null) {
         storeFile = targetKeystore
-        val isDebugKey = targetKeystore.name.contains("debug")
-        storePassword = System.getenv("KEYSTORE_PASSWORD") ?: if (isDebugKey) "android" else "releasepass123"
-        keyAlias = System.getenv("KEY_ALIAS") ?: if (isDebugKey) "androiddebugkey" else "release"
-        keyPassword = System.getenv("KEY_PASSWORD") ?: if (isDebugKey) "android" else "releasepass123"
+        storePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD") ?: System.getenv("KEYSTORE_PASSWORD") ?: "releasepass123"
+        keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: System.getenv("KEY_ALIAS") ?: "release"
+        keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: System.getenv("KEY_PASSWORD") ?: storePassword
       }
     }
     create("debugConfig") {
-      val envKeystoreFile = System.getenv("KEYSTORE_FILE")
+      val envDebugKeystore = System.getenv("DEBUG_KEYSTORE_FILE")
       val rootDebugKeystore = file("${rootDir}/debug.keystore")
       val appDebugKeystore = file("debug.keystore")
-      val rootReleaseKeystore = file("${rootDir}/release.keystore")
-      val appReleaseKeystore = file("release.keystore")
 
       val targetKeystore = when {
-        envKeystoreFile != null && file(envKeystoreFile).exists() -> file(envKeystoreFile)
+        envDebugKeystore != null && file(envDebugKeystore).exists() -> file(envDebugKeystore)
         rootDebugKeystore.exists() -> rootDebugKeystore
         appDebugKeystore.exists() -> appDebugKeystore
-        rootReleaseKeystore.exists() -> rootReleaseKeystore
-        appReleaseKeystore.exists() -> appReleaseKeystore
         else -> rootDebugKeystore
       }
 
       storeFile = targetKeystore
-      val isDebugKey = targetKeystore.name.contains("debug")
-      storePassword = System.getenv("KEYSTORE_PASSWORD") ?: if (isDebugKey) "android" else "releasepass123"
-      keyAlias = System.getenv("KEY_ALIAS") ?: if (isDebugKey) "androiddebugkey" else "release"
-      keyPassword = System.getenv("KEY_PASSWORD") ?: if (isDebugKey) "android" else "releasepass123"
+      storePassword = System.getenv("DEBUG_KEYSTORE_PASSWORD") ?: "android"
+      keyAlias = System.getenv("DEBUG_KEY_ALIAS") ?: "androiddebugkey"
+      keyPassword = System.getenv("DEBUG_KEY_PASSWORD") ?: "android"
     }
   }
 

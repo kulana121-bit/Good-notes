@@ -67,69 +67,39 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           echo "=== Configuring Release Signing Keystore ==="
+          
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Missing required secret KEYSTORE_BASE64. Production release builds require a configured release keystore."
+            echo "Please configure KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD in repository secrets."
+            exit 1
+          fi
+
+          if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "::error::Missing required release keystore credentials (KEYSTORE_PASSWORD, KEY_ALIAS, or KEY_PASSWORD)."
+            exit 1
+          fi
+
           RELEASE_KEYSTORE_PATH="${GITHUB_WORKSPACE:-.}/release.keystore"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RELEASE_KEYSTORE_PATH"
 
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "Using custom keystore from GitHub Secrets (KEYSTORE_BASE64)..."
-            echo "$KEYSTORE_BASE64" | base64 -d > "$RELEASE_KEYSTORE_PATH"
-
-            KEY_STORE_PASS="${KEYSTORE_PASSWORD:-releasepass123}"
-            ALIAS_NAME="${KEY_ALIAS:-release}"
-            KEY_PASS="${KEY_PASSWORD:-$KEY_STORE_PASS}"
-
-            if [ ! -s "$RELEASE_KEYSTORE_PATH" ]; then
-              echo "::warning::Failed to decode KEYSTORE_BASE64. Falling back to persistent repository keystore..."
-              rm -f "$RELEASE_KEYSTORE_PATH"
-            elif ! keytool -list -keystore "$RELEASE_KEYSTORE_PATH" -storepass "$KEY_STORE_PASS" -alias "$ALIAS_NAME" > /dev/null 2>&1; then
-              echo "::warning::Custom keystore validation failed with provided credentials. Falling back to persistent repository keystore..."
-              rm -f "$RELEASE_KEYSTORE_PATH"
-            else
-              echo "Custom release keystore validated successfully."
-              echo "KEYSTORE_FILE=$RELEASE_KEYSTORE_PATH" >> "$GITHUB_ENV"
-              echo "KEYSTORE_PASSWORD=$KEY_STORE_PASS" >> "$GITHUB_ENV"
-              echo "KEY_ALIAS=$ALIAS_NAME" >> "$GITHUB_ENV"
-              echo "KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
-            fi
+          if [ ! -s "$RELEASE_KEYSTORE_PATH" ]; then
+            echo "::error::Failed to decode KEYSTORE_BASE64 into a valid keystore file."
+            exit 1
           fi
 
-          if [ ! -f "$RELEASE_KEYSTORE_PATH" ]; then
-            if [ -f "./debug.keystore.base64" ]; then
-              echo "Restoring registered persistent keystore from ./debug.keystore.base64..."
-              base64 -d ./debug.keystore.base64 > "$RELEASE_KEYSTORE_PATH"
-            elif [ -f "./debug.keystore" ]; then
-              echo "Copying registered persistent keystore from ./debug.keystore..."
-              cp ./debug.keystore "$RELEASE_KEYSTORE_PATH"
-            fi
-
-            if [ -s "$RELEASE_KEYSTORE_PATH" ]; then
-              echo "KEYSTORE_FILE=$RELEASE_KEYSTORE_PATH" >> "$GITHUB_ENV"
-              echo "KEYSTORE_PASSWORD=android" >> "$GITHUB_ENV"
-              echo "KEY_ALIAS=androiddebugkey" >> "$GITHUB_ENV"
-              echo "KEY_PASSWORD=android" >> "$GITHUB_ENV"
-              echo "Registered persistent keystore configured for release build."
-            else
-              echo "Generating fallback release keystore..."
-              keytool -genkeypair -v \
-                -keystore "$RELEASE_KEYSTORE_PATH" \
-                -storepass releasepass123 \
-                -alias release \
-                -keypass releasepass123 \
-                -keyalg RSA \
-                -keysize 2048 \
-                -validity 10000 \
-                -dname "CN=Good Notes Release,O=Good Notes,C=US"
-
-              echo "KEYSTORE_FILE=$RELEASE_KEYSTORE_PATH" >> "$GITHUB_ENV"
-              echo "KEYSTORE_PASSWORD=releasepass123" >> "$GITHUB_ENV"
-              echo "KEY_ALIAS=release" >> "$GITHUB_ENV"
-              echo "KEY_PASSWORD=releasepass123" >> "$GITHUB_ENV"
-            fi
+          if ! keytool -list -keystore "$RELEASE_KEYSTORE_PATH" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error::Keystore validation failed with provided alias '$KEY_ALIAS' and credentials."
+            exit 1
           fi
 
-          echo "=== Release Keystore Fingerprints ==="
-          STORE_PASS="${KEYSTORE_PASSWORD:-android}"
-          ALIAS="${KEY_ALIAS:-androiddebugkey}"
-          keytool -list -v -keystore "$RELEASE_KEYSTORE_PATH" -storepass "$STORE_PASS" 2>/dev/null | grep -E "(Owner:|Issuer:|Alias name:|Valid from:|Certificate fingerprints:|SHA1:|SHA256:)" || true
+          echo "Release keystore validated successfully."
+          echo "RELEASE_KEYSTORE_FILE=$RELEASE_KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "RELEASE_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "RELEASE_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+
+          echo "=== Release Keystore Certificate Fingerprints ==="
+          keytool -list -v -keystore "$RELEASE_KEYSTORE_PATH" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" | grep -E "(Alias name|SHA1|SHA256):" || true
 
       - name: Build release APK
         run: ./gradlew :app:assembleRelease --stacktrace --no-daemon
@@ -162,7 +132,7 @@ jobs:
 
           echo "Release APK verification successful: $EXPECTED_APK ($(stat -c%s "$EXPECTED_APK") bytes)"
           
-          echo "=== ACTUAL APK SIGNING CERTIFICATE ==="
+          echo "=== ACTUAL RELEASE APK CERTIFICATE ==="
           SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/opt/android/sdk}}"
           APKSIGNER=$(find "$SDK_DIR"/build-tools -name apksigner 2>/dev/null | sort -V | tail -n 1)
           AAPT2=$(find "$SDK_DIR"/build-tools -name aapt2 2>/dev/null | sort -V | tail -n 1)
@@ -185,16 +155,9 @@ jobs:
             FORMATTED_SHA256=$(echo "$CERT_OUTPUT" | grep -i "SHA256:" | head -n 1 | awk '{print $2}' | tr '[:lower:]' '[:upper:]')
           fi
 
-          EXPECTED_SHA1="C7:42:4F:50:C7:3A:99:41:0D:82:15:4F:7B:F9:31:05:AA:E6:37:94"
           echo "Package: $PKG_NAME"
           echo "SHA-1: $FORMATTED_SHA1"
           echo "SHA-256: $FORMATTED_SHA256"
-          echo "Expected SHA-1: $EXPECTED_SHA1"
-          if [ "$FORMATTED_SHA1" = "$EXPECTED_SHA1" ]; then
-            echo "Firebase/OAuth Match: MATCHED"
-          else
-            echo "Firebase/OAuth Match: MISMATCH"
-          fi
           echo "======================================"
 
       - name: Upload release APK artifact

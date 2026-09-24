@@ -61,55 +61,45 @@ jobs:
 
       - name: Configure signing keystore
         env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          DEBUG_KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
+          DEBUG_KEY_ALIAS: ${{ secrets.DEBUG_KEY_ALIAS }}
+          DEBUG_KEY_PASSWORD: ${{ secrets.DEBUG_KEY_PASSWORD }}
         run: |
-          echo "=== Configuring Debug Keystore ==="
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "Using custom keystore from GitHub Secrets (KEYSTORE_BASE64)..."
-            echo "$KEYSTORE_BASE64" | base64 -d > ./debug.keystore
-            echo "KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD:-android}" >> $GITHUB_ENV
-            echo "KEY_ALIAS=${KEY_ALIAS:-androiddebugkey}" >> $GITHUB_ENV
-            echo "KEY_PASSWORD=${KEY_PASSWORD:-android}" >> $GITHUB_ENV
+          echo "=== Configuring Stable Debug Keystore ==="
+          DEBUG_KEYSTORE_PATH="${GITHUB_WORKSPACE:-.}/debug.keystore"
+
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            echo "Restoring debug keystore from DEBUG_KEYSTORE_BASE64 secret..."
+            echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > "$DEBUG_KEYSTORE_PATH"
           elif [ -f "./debug.keystore.base64" ]; then
             echo "Restoring stable repository debug keystore from ./debug.keystore.base64..."
-            base64 -d ./debug.keystore.base64 > ./debug.keystore
-            echo "KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
-            echo "KEY_ALIAS=androiddebugkey" >> $GITHUB_ENV
-            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
+            base64 -d ./debug.keystore.base64 > "$DEBUG_KEYSTORE_PATH"
           elif [ -f "./debug.keystore" ]; then
-            echo "Using existing ./debug.keystore..."
-            echo "KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
-            echo "KEY_ALIAS=androiddebugkey" >> $GITHUB_ENV
-            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
+            echo "Using existing repository ./debug.keystore..."
+            cp ./debug.keystore "$DEBUG_KEYSTORE_PATH" 2>/dev/null || true
+          elif [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Restoring debug keystore from KEYSTORE_BASE64 secret..."
+            echo "$KEYSTORE_BASE64" | base64 -d > "$DEBUG_KEYSTORE_PATH"
           else
-            echo "Generating standard debug keystore..."
-            keytool -genkeypair -v \
-              -keystore ./debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-            echo "KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
-            echo "KEY_ALIAS=androiddebugkey" >> $GITHUB_ENV
-            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
-          fi
-
-          if [ ! -s "./debug.keystore" ]; then
-            echo "ERROR: Keystore file ./debug.keystore does not exist or is empty."
+            echo "ERROR: Stable debug keystore not found in repository or secrets!"
+            echo "Expected ./debug.keystore.base64 or ./debug.keystore to exist."
             exit 1
           fi
 
-          echo "KEYSTORE_FILE=$(pwd)/debug.keystore" >> $GITHUB_ENV
+          if [ ! -s "$DEBUG_KEYSTORE_PATH" ]; then
+            echo "ERROR: Keystore file $DEBUG_KEYSTORE_PATH does not exist or is empty."
+            exit 1
+          fi
 
-          echo "=== Printing Debug Signing Certificate Fingerprints ==="
-          KEY_STORE_PASS="${KEYSTORE_PASSWORD:-android}"
-          keytool -list -v -keystore ./debug.keystore -storepass "$KEY_STORE_PASS" | grep -E "(SHA1|SHA256|Alias name):" || true
+          echo "DEBUG_KEYSTORE_FILE=$DEBUG_KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "DEBUG_KEYSTORE_PASSWORD=${DEBUG_KEYSTORE_PASSWORD:-android}" >> "$GITHUB_ENV"
+          echo "DEBUG_KEY_ALIAS=${DEBUG_KEY_ALIAS:-androiddebugkey}" >> "$GITHUB_ENV"
+          echo "DEBUG_KEY_PASSWORD=${DEBUG_KEY_PASSWORD:-android}" >> "$GITHUB_ENV"
+
+          echo "=== Stable Debug Keystore Verification ==="
+          keytool -list -v -keystore "$DEBUG_KEYSTORE_PATH" -storepass "${DEBUG_KEYSTORE_PASSWORD:-android}" | grep -E "(Alias name|SHA1|SHA256):" || true
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --stacktrace --no-daemon
@@ -142,7 +132,7 @@ jobs:
           
           echo "APK verification successful: $EXPECTED_APK ($(stat -c%s "$EXPECTED_APK") bytes)"
 
-          echo "=== ACTUAL APK SIGNING CERTIFICATE ==="
+          echo "=== ACTUAL DEBUG APK CERTIFICATE ==="
           SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/opt/android/sdk}}"
           APKSIGNER=$(find "$SDK_DIR"/build-tools -name apksigner 2>/dev/null | sort -V | tail -n 1)
           AAPT2=$(find "$SDK_DIR"/build-tools -name aapt2 2>/dev/null | sort -V | tail -n 1)
@@ -165,16 +155,9 @@ jobs:
             FORMATTED_SHA256=$(echo "$CERT_OUTPUT" | grep -i "SHA256:" | head -n 1 | awk '{print $2}' | tr '[:lower:]' '[:upper:]')
           fi
 
-          EXPECTED_SHA1="C7:42:4F:50:C7:3A:99:41:0D:82:15:4F:7B:F9:31:05:AA:E6:37:94"
           echo "Package: $PKG_NAME"
           echo "SHA-1: $FORMATTED_SHA1"
           echo "SHA-256: $FORMATTED_SHA256"
-          echo "Expected SHA-1: $EXPECTED_SHA1"
-          if [ "$FORMATTED_SHA1" = "$EXPECTED_SHA1" ]; then
-            echo "Firebase/OAuth Match: MATCHED"
-          else
-            echo "Firebase/OAuth Match: MISMATCH"
-          fi
           echo "======================================"
 
       - name: Upload debug APK artifact
