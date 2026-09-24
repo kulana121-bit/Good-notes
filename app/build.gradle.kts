@@ -49,16 +49,26 @@ android {
       }
     }
     create("debugConfig") {
+      val envKeystoreFile = System.getenv("KEYSTORE_FILE")
       val rootDebugKeystore = file("${rootDir}/debug.keystore")
       val appDebugKeystore = file("debug.keystore")
-      storeFile = when {
+      val rootReleaseKeystore = file("${rootDir}/release.keystore")
+      val appReleaseKeystore = file("release.keystore")
+
+      val targetKeystore = when {
+        envKeystoreFile != null && file(envKeystoreFile).exists() -> file(envKeystoreFile)
         rootDebugKeystore.exists() -> rootDebugKeystore
         appDebugKeystore.exists() -> appDebugKeystore
+        rootReleaseKeystore.exists() -> rootReleaseKeystore
+        appReleaseKeystore.exists() -> appReleaseKeystore
         else -> rootDebugKeystore
       }
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+
+      storeFile = targetKeystore
+      val isDebugKey = targetKeystore.name.contains("debug")
+      storePassword = System.getenv("KEYSTORE_PASSWORD") ?: if (isDebugKey) "android" else "releasepass123"
+      keyAlias = System.getenv("KEY_ALIAS") ?: if (isDebugKey) "androiddebugkey" else "release"
+      keyPassword = System.getenv("KEY_PASSWORD") ?: if (isDebugKey) "android" else "releasepass123"
     }
   }
 

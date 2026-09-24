@@ -142,15 +142,40 @@ jobs:
           
           echo "APK verification successful: $EXPECTED_APK ($(stat -c%s "$EXPECTED_APK") bytes)"
 
-          echo "=== APK Signing Certificate Fingerprints ==="
-          if command -v apksigner > /dev/null 2>&1; then
-            apksigner verify --print-certs "$EXPECTED_APK" || true
-          elif [ -n "$ANDROID_SDK_ROOT" ] && [ -f "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" ]; then
-            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$EXPECTED_APK" || true
+          echo "=== ACTUAL APK SIGNING CERTIFICATE ==="
+          SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/opt/android/sdk}}"
+          APKSIGNER=$(find "$SDK_DIR"/build-tools -name apksigner 2>/dev/null | sort -V | tail -n 1)
+          AAPT2=$(find "$SDK_DIR"/build-tools -name aapt2 2>/dev/null | sort -V | tail -n 1)
+
+          if [ -n "$AAPT2" ] && [ -x "$AAPT2" ]; then
+            PKG_NAME=$("$AAPT2" dump packagename "$EXPECTED_APK" 2>/dev/null || echo "com.aistudio.notes.dktzpq")
           else
-            echo "Checking APK cert with keytool..."
-            keytool -printcert -jarfile "$EXPECTED_APK" || true
+            PKG_NAME="com.aistudio.notes.dktzpq"
           fi
+
+          if [ -n "$APKSIGNER" ] && [ -x "$APKSIGNER" ]; then
+            CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$EXPECTED_APK" 2>/dev/null || true)
+            RAW_SHA1=$(echo "$CERT_OUTPUT" | grep -i "SHA-1 digest:" | head -n 1 | awk '{print $NF}')
+            RAW_SHA256=$(echo "$CERT_OUTPUT" | grep -i "SHA-256 digest:" | head -n 1 | awk '{print $NF}')
+            FORMATTED_SHA1=$(echo "$RAW_SHA1" | sed 's/../&:/g;s/:$//' | tr '[:lower:]' '[:upper:]')
+            FORMATTED_SHA256=$(echo "$RAW_SHA256" | sed 's/../&:/g;s/:$//' | tr '[:lower:]' '[:upper:]')
+          else
+            CERT_OUTPUT=$(keytool -printcert -jarfile "$EXPECTED_APK" 2>/dev/null || true)
+            FORMATTED_SHA1=$(echo "$CERT_OUTPUT" | grep -i "SHA1:" | head -n 1 | awk '{print $2}' | tr '[:lower:]' '[:upper:]')
+            FORMATTED_SHA256=$(echo "$CERT_OUTPUT" | grep -i "SHA256:" | head -n 1 | awk '{print $2}' | tr '[:lower:]' '[:upper:]')
+          fi
+
+          EXPECTED_SHA1="C7:42:4F:50:C7:3A:99:41:0D:82:15:4F:7B:F9:31:05:AA:E6:37:94"
+          echo "Package: $PKG_NAME"
+          echo "SHA-1: $FORMATTED_SHA1"
+          echo "SHA-256: $FORMATTED_SHA256"
+          echo "Expected SHA-1: $EXPECTED_SHA1"
+          if [ "$FORMATTED_SHA1" = "$EXPECTED_SHA1" ]; then
+            echo "Firebase/OAuth Match: MATCHED"
+          else
+            echo "Firebase/OAuth Match: MISMATCH"
+          fi
+          echo "======================================"
 
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
