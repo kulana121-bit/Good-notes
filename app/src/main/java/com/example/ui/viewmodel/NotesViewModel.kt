@@ -583,6 +583,16 @@ class NotesViewModel(
         }
     }
 
+    fun switchGoogleAccount(activityContext: Context? = null, webClientId: String? = null, onResult: (Result<UserSummary>) -> Unit) {
+        viewModelScope.launch {
+            val result = authService.switchGoogleAccount(activityContext, webClientId)
+            if (result.isSuccess) {
+                syncManager.syncNow()
+            }
+            onResult(result)
+        }
+    }
+
     fun signInWithEmail(email: String, pass: String, onResult: (Result<UserSummary>) -> Unit) {
         viewModelScope.launch {
             val result = authService.signInWithEmail(email, pass)
@@ -650,6 +660,11 @@ class NotesViewModel(
     fun getDriveAuthorizationIntent(): Intent {
         val preferredEmail = authService.currentUser.value?.email
         return driveAuthManager.getAuthorizationIntent(preferredEmail)
+    }
+
+    fun getSwitchDriveAccountIntent(): Intent {
+        val preferredEmail = authService.currentUser.value?.email
+        return driveAuthManager.getSwitchAccountIntent(preferredEmail)
     }
 
     fun handleDriveAuthResult(data: Intent?, onResult: (Result<DriveAuthState.Connected>) -> Unit) {

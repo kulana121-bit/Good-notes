@@ -175,7 +175,7 @@ class GoogleDriveDocumentService(
 
             val json = JSONObject(bodyString)
             val fileId = json.getString("id")
-            val md5 = json.optString("md5Checksum", null)
+            val md5 = if (json.has("md5Checksum")) json.getString("md5Checksum") else null
 
             Log.i(tag, "Successfully uploaded document ${document.id} to Drive (ID: $fileId)")
             Result.success(
@@ -259,7 +259,7 @@ class GoogleDriveDocumentService(
 
             val json = JSONObject(bodyString)
             val updatedId = json.optString("id", driveFileId)
-            val md5 = json.optString("md5Checksum", null)
+            val md5 = if (json.has("md5Checksum")) json.getString("md5Checksum") else null
 
             Log.i(tag, "Successfully patched document on Drive (ID: $updatedId)")
             Result.success(

@@ -180,6 +180,10 @@ fun HomeScreen(
         }
     }
 
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val noteGridColumns = if (isLandscape) 3 else 2
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -359,32 +363,19 @@ fun HomeScreen(
                             .padding(horizontal = 20.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        filteredNotes.chunked(2).forEachIndexed { rowIndex, chunk ->
-                            if (chunk.size == 2) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                                ) {
+                        filteredNotes.chunked(noteGridColumns).forEachIndexed { rowIndex, chunk ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                chunk.forEachIndexed { colIndex, noteItem ->
                                     StaggeredAnimatedItem(
-                                        index = rowIndex * 2,
+                                        index = rowIndex * noteGridColumns + colIndex,
                                         modifier = Modifier.weight(1f)
                                     ) {
                                         NoteCard(
-                                            note = chunk[0],
-                                            onClick = { onNoteClick(chunk[0]) },
-                                            onToggleFavorite = onToggleFavorite,
-                                            onToggleChecklistItem = onToggleChecklistItem,
-                                            onDeleteNote = onDeleteNote,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
-                                    StaggeredAnimatedItem(
-                                        index = rowIndex * 2 + 1,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        NoteCard(
-                                            note = chunk[1],
-                                            onClick = { onNoteClick(chunk[1]) },
+                                            note = noteItem,
+                                            onClick = { onNoteClick(noteItem) },
                                             onToggleFavorite = onToggleFavorite,
                                             onToggleChecklistItem = onToggleChecklistItem,
                                             onDeleteNote = onDeleteNote,
@@ -392,19 +383,10 @@ fun HomeScreen(
                                         )
                                     }
                                 }
-                            } else if (chunk.isNotEmpty()) {
-                                StaggeredAnimatedItem(
-                                    index = rowIndex * 2,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    NoteCard(
-                                        note = chunk[0],
-                                        onClick = { onNoteClick(chunk[0]) },
-                                        onToggleFavorite = onToggleFavorite,
-                                        onToggleChecklistItem = onToggleChecklistItem,
-                                        onDeleteNote = onDeleteNote,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
+                                if (chunk.size < noteGridColumns) {
+                                    repeat(noteGridColumns - chunk.size) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
                                 }
                             }
                         }

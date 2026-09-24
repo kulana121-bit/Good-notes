@@ -1,4 +1,16 @@
 # Proguard and R8 optimization rules for production release
+# Aggressive R8 Optimization & Dead-Code Elimination
+-optimizationpasses 5
+-allowaccessmodification
+-mergeinterfacesaggressively
+-repackageclasses ''
+
+# Strip verbose/debug logging overhead in release builds
+-assumenosideeffects class android.util.Log {
+    public static boolean isLoggable(java.lang.String, int);
+    public static int v(...);
+    public static int d(...);
+}
 
 # --- Base rules ---
 -keepattributes *Annotation*, InnerClasses, Signature, Exceptions, EnclosingMethod

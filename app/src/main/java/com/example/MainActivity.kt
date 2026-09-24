@@ -139,6 +139,18 @@ fun NotesApp(
         }
     }
 
+    val switchDriveAuthLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        viewModel.handleDriveAuthResult(result.data) { authRes ->
+            if (authRes.isSuccess) {
+                Log.i("MainActivity", "Google Drive account switch successful")
+            } else {
+                Log.w("MainActivity", "Google Drive account switch failed: ${authRes.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
     var isSearchActive by remember { mutableStateOf(false) }
 
     // Intercept hardware back button
@@ -326,6 +338,7 @@ fun NotesApp(
                             lastSyncReport = lastSyncReport,
                             pendingOperationsCount = pendingOperationsCount,
                             onSignInWithGoogle = { cb -> viewModel.signInWithGoogle(activityContext = context, onResult = cb) },
+                            onSwitchGoogleAccount = { cb -> viewModel.switchGoogleAccount(activityContext = context, onResult = cb) },
                             onSignInWithEmail = { email, pass, cb -> viewModel.signInWithEmail(email, pass, cb) },
                             onSignUpWithEmail = { email, pass, name, cb -> viewModel.signUpWithEmail(email, pass, name, cb) },
                             onSignInAnonymously = { cb -> viewModel.signInAnonymously(cb) },
@@ -342,6 +355,13 @@ fun NotesApp(
                                     driveAuthLauncher.launch(viewModel.getDriveAuthorizationIntent())
                                 } catch (e: Exception) {
                                     Log.e("MainActivity", "Failed to launch Drive authorization intent", e)
+                                }
+                            },
+                            onSwitchDriveAccount = {
+                                try {
+                                    switchDriveAuthLauncher.launch(viewModel.getSwitchDriveAccountIntent())
+                                } catch (e: Exception) {
+                                    Log.e("MainActivity", "Failed to launch Drive switch account intent", e)
                                 }
                             },
                             onDisconnectDrive = { viewModel.disconnectDrive() },

@@ -125,6 +125,7 @@ fun SettingsScreen(
     lastSyncReport: SyncReport? = null,
     pendingOperationsCount: Int = 0,
     onSignInWithGoogle: ((Result<UserSummary>) -> Unit) -> Unit = {},
+    onSwitchGoogleAccount: (((Result<UserSummary>) -> Unit) -> Unit)? = null,
     onSignInWithEmail: (email: String, pass: String, (Result<UserSummary>) -> Unit) -> Unit = { _, _, _ -> },
     onSignUpWithEmail: (email: String, pass: String, name: String, (Result<UserSummary>) -> Unit) -> Unit = { _, _, _, _ -> },
     onSignInAnonymously: ((Result<UserSummary>) -> Unit) -> Unit = {},
@@ -137,6 +138,7 @@ fun SettingsScreen(
     isDriveTesting: Boolean = false,
     lastDriveTestReport: DriveTestReport? = null,
     onConnectDrive: () -> Unit = {},
+    onSwitchDriveAccount: (() -> Unit)? = null,
     onDisconnectDrive: () -> Unit = {},
     onTestDriveConnection: ((Result<DriveTestReport>) -> Unit) -> Unit = {},
     onRefreshDrive: () -> Unit = {},
@@ -275,7 +277,7 @@ fun SettingsScreen(
                                         )
                                     }
 
-                                    Column {
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = currentUser.displayName ?: "Authenticated User",
                                             style = MaterialTheme.typography.titleSmall.copy(
@@ -294,19 +296,49 @@ fun SettingsScreen(
                                     }
                                 }
 
-                                IconButton(
-                                    onClick = onSignOut,
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Logout,
-                                        contentDescription = "Sign Out",
-                                        tint = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(18.dp)
-                                    )
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            if (onSwitchGoogleAccount != null) {
+                                                onSwitchGoogleAccount { res ->
+                                                    coroutineScope.launch {
+                                                        if (res.isSuccess) {
+                                                            snackbarHostState.showSnackbar("Switched to ${res.getOrNull()?.displayName ?: "Google User"}")
+                                                        } else {
+                                                            snackbarHostState.showSnackbar("Switch account: ${res.exceptionOrNull()?.localizedMessage ?: "Cancelled"}")
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                isAuthDialogOpen = true
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(12.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = "Switch",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontFamily = OutfitFontFamily,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        )
+                                    }
+
+                                    IconButton(
+                                        onClick = onSignOut,
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Logout,
+                                            contentDescription = "Sign Out",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
                                 }
                             }
                         } else {
@@ -485,16 +517,34 @@ fun SettingsScreen(
                                         }
                                     }
 
-                                    IconButton(
-                                        onClick = onDisconnectDrive,
-                                        modifier = Modifier.size(36.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.Logout,
-                                            contentDescription = "Disconnect Drive",
-                                            tint = MaterialTheme.colorScheme.error,
-                                            modifier = Modifier.size(18.dp)
-                                        )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        if (onSwitchDriveAccount != null) {
+                                            OutlinedButton(
+                                                onClick = onSwitchDriveAccount,
+                                                shape = RoundedCornerShape(12.dp),
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Switch",
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontFamily = OutfitFontFamily,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                )
+                                            }
+                                        }
+
+                                        IconButton(
+                                            onClick = onDisconnectDrive,
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Logout,
+                                                contentDescription = "Disconnect Drive",
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
                                     }
                                 }
 

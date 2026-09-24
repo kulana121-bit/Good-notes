@@ -78,6 +78,16 @@ class GoogleDriveAuthManager(private val context: Context) {
     }
 
     /**
+     * Obtains an Intent that forces displaying the Google Account Chooser to switch accounts smoothly.
+     */
+    fun getSwitchAccountIntent(preferredEmail: String? = null): Intent {
+        try {
+            getClient().signOut()
+        } catch (_: Exception) { }
+        return getClient(preferredEmail).signInIntent
+    }
+
+    /**
      * Handles the result of the Google Drive authorization Intent.
      */
     fun handleAuthorizationResult(data: Intent?): Result<DriveAuthState.Connected> {

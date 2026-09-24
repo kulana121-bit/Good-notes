@@ -195,12 +195,23 @@ class FirebaseAuthService(private val context: Context) {
     /**
      * Attempts Google Sign-In using Credential Manager and exchanges the ID token with Firebase Auth.
      */
-    suspend fun signInWithGoogle(activityContext: Context? = null, webClientId: String? = null): Result<UserSummary> = withContext(Dispatchers.IO) {
+    suspend fun signInWithGoogle(
+        activityContext: Context? = null,
+        webClientId: String? = null,
+        forceAccountPicker: Boolean = false
+    ): Result<UserSummary> = withContext(Dispatchers.IO) {
         val authInstance = auth ?: return@withContext Result.failure(
             Exception(
                 "Firebase Authentication is unavailable: ${lastInitError?.localizedMessage ?: "FirebaseApp not initialized. Verify google-services.json configuration."}"
             )
         )
+
+        // If forceAccountPicker requested, clear credential state first
+        if (forceAccountPicker) {
+            try {
+                credentialManager?.clearCredentialState(ClearCredentialStateRequest())
+            } catch (_: Exception) { }
+        }
 
         // Check Google Play Services status
         val playServicesAvailability = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context)
@@ -223,7 +234,7 @@ class FirebaseAuthService(private val context: Context) {
             ?: context
 
         val resolvedClientId = resolveWebClientId(webClientId)
-        Log.d(tag, "Initiating Google Sign-In with resolved client ID")
+        Log.d(tag, "Initiating Google Sign-In (forcePicker=$forceAccountPicker)")
 
         var idToken: String? = null
 
@@ -231,26 +242,25 @@ class FirebaseAuthService(private val context: Context) {
         try {
             val activeCredentialManager = CredentialManager.create(launchContext)
 
-            // Step 1a: Try authorized accounts with auto-select
-            val credentialResponse: GetCredentialResponse = try {
-                val authorizedOption = GetGoogleIdOption.Builder()
-                    .setServerClientId(resolvedClientId)
-                    .setFilterByAuthorizedAccounts(true)
-                    .setAutoSelectEnabled(true)
-                    .build()
-
-                val authorizedRequest = GetCredentialRequest.Builder()
-                    .addCredentialOption(authorizedOption)
-                    .build()
-
-                activeCredentialManager.getCredential(context = launchContext, request = authorizedRequest)
-            } catch (e: GetCredentialCancellationException) {
-                Log.i(tag, "Google Sign-In cancelled by user")
-                return@withContext Result.failure(e)
-            } catch (e: Exception) {
-                // Step 1b: Fallback to all Google accounts selector
-                Log.d(tag, "Authorized account match not found (${e.javaClass.simpleName}), requesting account chooser")
+            val credentialResponse: GetCredentialResponse = if (!forceAccountPicker) {
+                // Try authorized accounts with auto-select
                 try {
+                    val authorizedOption = GetGoogleIdOption.Builder()
+                        .setServerClientId(resolvedClientId)
+                        .setFilterByAuthorizedAccounts(true)
+                        .setAutoSelectEnabled(true)
+                        .build()
+
+                    val authorizedRequest = GetCredentialRequest.Builder()
+                        .addCredentialOption(authorizedOption)
+                        .build()
+
+                    activeCredentialManager.getCredential(context = launchContext, request = authorizedRequest)
+                } catch (e: GetCredentialCancellationException) {
+                    Log.i(tag, "Google Sign-In cancelled by user")
+                    return@withContext Result.failure(e)
+                } catch (e: Exception) {
+                    // Fallback to account picker
                     val allAccountsOption = GetGoogleIdOption.Builder()
                         .setServerClientId(resolvedClientId)
                         .setFilterByAuthorizedAccounts(false)
@@ -262,20 +272,20 @@ class FirebaseAuthService(private val context: Context) {
                         .build()
 
                     activeCredentialManager.getCredential(context = launchContext, request = fallbackRequest)
-                } catch (cancelEx: GetCredentialCancellationException) {
-                    Log.i(tag, "Google Sign-In account selection cancelled by user")
-                    return@withContext Result.failure(cancelEx)
-                } catch (fallbackEx: Exception) {
-                    val msg = fallbackEx.message ?: ""
-                    Log.w(tag, "Credential Manager request failed: ${fallbackEx.javaClass.simpleName} - $msg")
-
-                    if (msg.contains("DEVELOPER_ERROR", ignoreCase = true) || msg.contains("10:") || msg.contains("code: 10")) {
-                        return@withContext Result.failure(
-                            Exception("Google Sign-In configuration error (DEVELOPER_ERROR / Code 10). The APK signing SHA-1 certificate is not registered in Firebase/Google Cloud Console for package ${context.packageName}.")
-                        )
-                    }
-                    throw fallbackEx
                 }
+            } else {
+                // Direct account chooser without auto-selection
+                val allAccountsOption = GetGoogleIdOption.Builder()
+                    .setServerClientId(resolvedClientId)
+                    .setFilterByAuthorizedAccounts(false)
+                    .setAutoSelectEnabled(false)
+                    .build()
+
+                val pickerRequest = GetCredentialRequest.Builder()
+                    .addCredentialOption(allAccountsOption)
+                    .build()
+
+                activeCredentialManager.getCredential(context = launchContext, request = pickerRequest)
             }
 
             val credential = credentialResponse.credential
@@ -299,6 +309,11 @@ class FirebaseAuthService(private val context: Context) {
                     .requestEmail()
                     .build()
                 val googleSignInClient = GoogleSignIn.getClient(context, gso)
+                if (forceAccountPicker) {
+                    try {
+                        googleSignInClient.signOut()
+                    } catch (_: Exception) { }
+                }
                 val account: GoogleSignInAccount? = GoogleSignIn.getLastSignedInAccount(context)
                 if (account?.idToken != null) {
                     idToken = account.idToken
@@ -354,6 +369,13 @@ class FirebaseAuthService(private val context: Context) {
             Log.e(tag, "Unexpected error during Firebase sign-in: ${e.javaClass.simpleName} - ${e.message}")
             Result.failure(e)
         }
+    }
+
+    /**
+     * Explicitly prompts the Google Account Chooser to switch the active Google account.
+     */
+    suspend fun switchGoogleAccount(activityContext: Context? = null, webClientId: String? = null): Result<UserSummary> {
+        return signInWithGoogle(activityContext = activityContext, webClientId = webClientId, forceAccountPicker = true)
     }
 
     suspend fun signInWithEmail(email: String, pass: String): Result<UserSummary> = withContext(Dispatchers.IO) {
