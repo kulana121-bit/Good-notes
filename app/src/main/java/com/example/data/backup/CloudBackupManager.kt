@@ -52,20 +52,26 @@ class CloudBackupManager(
             return@withContext Result.failure(Exception("Sign in required for cloud backup."))
         }
 
-        val driveState = driveService.checkAuthorization()
+        val currentUserEmail = authService.currentUser.value?.email
+        val driveState = driveService.checkAuthorization(expectedEmail = currentUserEmail)
         if (driveState !is DriveAuthState.Connected) {
-            _backupProgress.value = CloudBackupProgress(status = "Error", errorMessage = "Google Drive isn't connected.")
-            return@withContext Result.failure(Exception("Google Drive isn't connected."))
+            val err = if (driveState is DriveAuthState.AccountMismatch) {
+                "Drive account (${driveState.driveEmail}) doesn't match signed-in Google account (${driveState.firebaseEmail})."
+            } else {
+                "Google Drive isn't connected."
+            }
+            _backupProgress.value = CloudBackupProgress(status = "Error", errorMessage = err)
+            return@withContext Result.failure(Exception(err))
         }
 
         try {
             _backupProgress.value = CloudBackupProgress(status = "Preparing...", progress = 0.15f)
 
-            // 1. Gather Room entities
-            val notes = database.noteDao().getAllNotesDirect()
-            val folders = database.folderDao().getAllFoldersDirect()
+            // 1. Gather Room entities for the active user
+            val notes = database.noteDao().getAllNotesDirect(uid)
+            val folders = database.folderDao().getAllFoldersDirect(uid)
             val settings = database.settingDao().getAllSettingsDirect()
-            val documents = database.documentDao().getAllDocumentsDirect()
+            val documents = database.documentDao().getAllDocumentsDirect(uid)
 
             // 2. Map to versioned DTOs
             val backupDto = CloudBackupDto(
@@ -86,7 +92,7 @@ class CloudBackupManager(
             val jsonBytes = jsonString.toByteArray(Charsets.UTF_8)
 
             // 4. Resolve Drive folder structure
-            _backupProgress.value = CloudBackupProgress(status = "Connecting to Google Drive folder...", progress = 0.4f)
+            _backupProgress.value = CloudBackupProgress(status = "Connecting to Google Drive folder...", progress = 0.45f)
             val folderStructure = driveService.getOrCreateNotesFolderStructure().getOrThrow()
 
             // 5. Atomic upload: Upload temporary file notes_backup.tmp first
@@ -145,20 +151,18 @@ class CloudBackupManager(
                 for ((idx, doc) in activeDocs.withIndex()) {
                     val progressValue = 0.7f + (0.22f * ((idx + 1).toFloat() / totalDocs.toFloat()))
                     _backupProgress.value = CloudBackupProgress(
-                        status = "Uploading documents...",
+                        status = "Uploading documents (${idx + 1}/$totalDocs)...",
                         progress = progressValue
                     )
 
                     val targetDriveName = "${doc.id}_${doc.fileName}"
                     val existingFile = existingDriveFilesMap[targetDriveName]
 
-                    // Check if already uploaded and size matches
                     if (existingFile != null && existingFile.size == doc.fileSize && doc.fileSize > 0) {
                         Log.d(tag, "Document '$targetDriveName' is already up to date on Drive. Skipping duplicate upload.")
                         continue
                     }
 
-                    // Read local document bytes
                     val bytes = readDocumentBytes(doc)
                     if (bytes != null && bytes.isNotEmpty()) {
                         val docUploadRes = driveService.uploadOrUpdateFile(
@@ -194,7 +198,8 @@ class CloudBackupManager(
      * Checks whether a valid cloud backup exists in the user's Google Drive.
      */
     suspend fun checkForCloudBackup(): Result<CloudBackupDto?> = withContext(Dispatchers.IO) {
-        val driveState = driveService.checkAuthorization()
+        val currentUserEmail = authService.currentUser.value?.email
+        val driveState = driveService.checkAuthorization(expectedEmail = currentUserEmail)
         if (driveState !is DriveAuthState.Connected) {
             return@withContext Result.failure(Exception("Google Drive not connected"))
         }
@@ -233,22 +238,17 @@ class CloudBackupManager(
                 checkRes.getOrNull() ?: throw Exception("No cloud backup found on your Google Drive.")
             }
 
-            // Validate schema
             if (backupDto.schemaVersion < 1) {
                 throw Exception("Unsupported backup schema version: ${backupDto.schemaVersion}")
             }
 
-            // Verify user ownership where authenticated
-            val currentUid = authService.getCurrentUserId()
-            if (!currentUid.isNullOrBlank() && backupDto.userId.isNotBlank() && backupDto.userId != currentUid) {
-                Log.w(tag, "Restoring backup originating from user '${backupDto.userId}' under active user session '$currentUid'")
-            }
+            val currentUid = authService.getCurrentUserId() ?: ""
 
             _restoreProgress.value = CloudBackupProgress(status = "Restoring folders...", progress = 0.3f)
             var foldersRestored = 0
-            val existingFolders = database.folderDao().getAllFoldersDirect().associateBy { it.id }
+            val existingFolders = database.folderDao().getAllFoldersDirect(currentUid).associateBy { it.id }
             for (fDto in backupDto.folders) {
-                val entity = fDto.toEntity()
+                val entity = fDto.toEntity().copy(userId = currentUid)
                 if (!existingFolders.containsKey(entity.id)) {
                     database.folderDao().insertFolder(entity)
                     foldersRestored++
@@ -257,22 +257,17 @@ class CloudBackupManager(
 
             _restoreProgress.value = CloudBackupProgress(status = "Restoring notes...", progress = 0.5f)
             var notesRestored = 0
-            val existingNotes = database.noteDao().getAllNotesDirect().associateBy { it.id }
+            val existingNotes = database.noteDao().getAllNotesDirect(currentUid).associateBy { it.id }
 
             for (nDto in backupDto.notes) {
-                val cloudNote = nDto.toEntity()
+                val cloudNote = nDto.toEntity().copy(userId = currentUid)
                 val localNote = existingNotes[cloudNote.id]
 
                 if (localNote == null) {
                     database.noteDao().insertNoteSync(cloudNote)
                     notesRestored++
                 } else {
-                    // Conflict Resolution: Last-write-wins based on updatedAt
-                    if (cloudNote.updatedAt > localNote.updatedAt) {
-                        database.noteDao().insertNoteSync(cloudNote)
-                        notesRestored++
-                    } else if (cloudNote.updatedAt == localNote.updatedAt && cloudNote.content != localNote.content) {
-                        // Deterministic tie breaker: keep cloud note if content differs
+                    if (cloudNote.updatedAt >= localNote.updatedAt) {
                         database.noteDao().insertNoteSync(cloudNote)
                         notesRestored++
                     }
@@ -288,8 +283,7 @@ class CloudBackupManager(
 
             _restoreProgress.value = CloudBackupProgress(status = "Preparing documents...", progress = 0.75f)
             var docsRestored = 0
-            val existingDocs = database.documentDao().getAllDocumentsDirect().associateBy { it.id }
-            val docsFolder = File(context.filesDir, "documents").apply { if (!exists()) mkdirs() }
+            val existingDocs = database.documentDao().getAllDocumentsDirect(currentUid).associateBy { it.id }
 
             val folderStructure = driveService.getOrCreateNotesFolderStructure().getOrNull()
             val driveFilesMap = if (folderStructure != null) {
@@ -313,7 +307,6 @@ class CloudBackupManager(
                 if (localTargetFile.exists() && localTargetFile.length() > 0) {
                     resolvedLocalPath = localTargetFile.absolutePath
                 } else if (folderStructure != null) {
-                    // Attempt background download from Google Drive
                     val driveFile = driveFilesMap["${dDto.id}_${dDto.fileName}"]
                     if (driveFile != null) {
                         try {
@@ -328,7 +321,7 @@ class CloudBackupManager(
                     }
                 }
 
-                val docEntity = dDto.toEntity(resolvedLocalPath)
+                val docEntity = dDto.toEntity(resolvedLocalPath).copy(userId = currentUid)
                 if (localDoc == null || dDto.updatedAt > localDoc.updatedAt) {
                     database.documentDao().insertDocumentSync(docEntity)
                     docsRestored++

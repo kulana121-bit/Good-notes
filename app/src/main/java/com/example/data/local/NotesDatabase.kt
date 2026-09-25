@@ -26,7 +26,7 @@ import com.example.data.local.entity.SettingEntity
         DocumentEntity::class,
         PendingSyncOperation::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class NotesDatabase : RoomDatabase() {
@@ -38,15 +38,15 @@ abstract class NotesDatabase : RoomDatabase() {
     abstract fun pendingSyncDao(): PendingSyncDao
 
     @Transaction
-    open suspend fun renameFolderWithNotes(oldName: String, newName: String, timestamp: Long = System.currentTimeMillis()) {
-        folderDao().renameFolder(oldName = oldName, newName = newName, timestamp = timestamp)
-        noteDao().renameFolderInNotes(oldFolderName = oldName, newFolderName = newName, timestamp = timestamp)
+    open suspend fun renameFolderWithNotes(userId: String = "", oldName: String, newName: String, timestamp: Long = System.currentTimeMillis()) {
+        folderDao().renameFolder(userId = userId, oldName = oldName, newName = newName, timestamp = timestamp)
+        noteDao().renameFolderInNotes(userId = userId, oldFolderName = oldName, newFolderName = newName, timestamp = timestamp)
     }
 
     @Transaction
-    open suspend fun deleteFolderSafely(folderId: String, folderName: String, fallbackFolder: String = "Personal", timestamp: Long = System.currentTimeMillis()) {
-        folderDao().softDeleteFolder(folderId, timestamp)
-        noteDao().renameFolderInNotes(oldFolderName = folderName, newFolderName = fallbackFolder, timestamp = timestamp)
+    open suspend fun deleteFolderSafely(userId: String = "", folderId: String, folderName: String, fallbackFolder: String = "Personal", timestamp: Long = System.currentTimeMillis()) {
+        folderDao().softDeleteFolder(userId = userId, id = folderId, timestamp = timestamp)
+        noteDao().renameFolderInNotes(userId = userId, oldFolderName = folderName, newFolderName = fallbackFolder, timestamp = timestamp)
     }
 
     companion object {
@@ -147,6 +147,41 @@ abstract class NotesDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add userId columns for account isolation
+                db.execSQL("ALTER TABLE notes ADD COLUMN userId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE folders ADD COLUMN userId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE documents ADD COLUMN userId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE pending_sync_operations ADD COLUMN userId TEXT NOT NULL DEFAULT ''")
+
+                // Create account-isolated indices
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_notes_userId` ON `notes` (`userId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_notes_userId_isDeleted` ON `notes` (`userId`, `isDeleted`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_notes_userId_isFavorite` ON `notes` (`userId`, `isFavorite`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_notes_userId_folder` ON `notes` (`userId`, `folder`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_notes_userId_updatedAt` ON `notes` (`userId`, `updatedAt`)")
+
+                db.execSQL("DROP INDEX IF EXISTS `index_folders_name`")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_folders_userId` ON `folders` (`userId`)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_folders_userId_name` ON `folders` (`userId`, `name`)")
+
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_documents_userId` ON `documents` (`userId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_documents_userId_isDeleted` ON `documents` (`userId`, `isDeleted`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_documents_userId_isFavorite` ON `documents` (`userId`, `isFavorite`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_documents_userId_lastOpenedAt` ON `documents` (`userId`, `lastOpenedAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_documents_userId_driveFileId` ON `documents` (`userId`, `driveFileId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_documents_userId_contentHash` ON `documents` (`userId`, `contentHash`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_documents_userId_downloadState` ON `documents` (`userId`, `downloadState`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_documents_userId_uploadState` ON `documents` (`userId`, `uploadState`)")
+
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_pending_sync_operations_userId` ON `pending_sync_operations` (`userId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_pending_sync_operations_userId_entityId` ON `pending_sync_operations` (`userId`, `entityId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_pending_sync_operations_userId_entityType_entityId` ON `pending_sync_operations` (`userId`, `entityType`, `entityId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_pending_sync_operations_userId_createdAt` ON `pending_sync_operations` (`userId`, `createdAt`)")
+            }
+        }
+
         fun getInstance(context: Context): NotesDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -154,7 +189,7 @@ abstract class NotesDatabase : RoomDatabase() {
                     NotesDatabase::class.java,
                     "notes_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance

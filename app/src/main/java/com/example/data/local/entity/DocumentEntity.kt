@@ -9,17 +9,19 @@ import com.squareup.moshi.JsonClass
 @Entity(
     tableName = "documents",
     indices = [
-        Index(value = ["isDeleted"]),
-        Index(value = ["isFavorite"]),
-        Index(value = ["lastOpenedAt"]),
-        Index(value = ["driveFileId"]),
-        Index(value = ["contentHash"]),
-        Index(value = ["downloadState"]),
-        Index(value = ["uploadState"])
+        Index(value = ["userId"]),
+        Index(value = ["userId", "isDeleted"]),
+        Index(value = ["userId", "isFavorite"]),
+        Index(value = ["userId", "lastOpenedAt"]),
+        Index(value = ["userId", "driveFileId"]),
+        Index(value = ["userId", "contentHash"]),
+        Index(value = ["userId", "downloadState"]),
+        Index(value = ["userId", "uploadState"])
     ]
 )
 data class DocumentEntity(
     @PrimaryKey val id: String,
+    val userId: String = "",
     val fileName: String,
     val displayName: String,
     val localPath: String,

@@ -37,8 +37,8 @@ class DocumentDriveMigrationManager(
      * Executes idempotent migration of legacy Firebase Storage documents to Google Drive.
      * Firebase files are preserved until Drive upload is verified.
      */
-    suspend fun migratePendingDocuments(): Result<DocumentMigrationState> = withContext(Dispatchers.IO) {
-        val candidates = documentDao.getDocumentsNeedingFirebaseMigration()
+    suspend fun migratePendingDocuments(userId: String = ""): Result<DocumentMigrationState> = withContext(Dispatchers.IO) {
+        val candidates = documentDao.getDocumentsNeedingFirebaseMigration(userId)
         if (candidates.isEmpty()) {
             Log.d(tag, "No legacy Firebase Storage documents require migration.")
             return@withContext Result.success(_migrationState.value)

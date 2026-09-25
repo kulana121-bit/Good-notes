@@ -9,13 +9,15 @@ import com.squareup.moshi.JsonClass
 @Entity(
     tableName = "pending_sync_operations",
     indices = [
-        Index(value = ["entityId"]),
-        Index(value = ["entityType", "entityId"]),
-        Index(value = ["createdAt"])
+        Index(value = ["userId"]),
+        Index(value = ["userId", "entityId"]),
+        Index(value = ["userId", "entityType", "entityId"]),
+        Index(value = ["userId", "createdAt"])
     ]
 )
 data class PendingSyncOperation(
     @PrimaryKey val operationId: String,
+    val userId: String = "",
     val entityType: String,      // "NOTE", "FOLDER", "DOCUMENT"
     val entityId: String,
     val operationType: String,    // "CREATE", "UPDATE", "DELETE"

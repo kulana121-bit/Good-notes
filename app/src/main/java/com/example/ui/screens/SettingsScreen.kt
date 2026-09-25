@@ -672,6 +672,69 @@ fun SettingsScreen(
                                 }
                             }
 
+                            is DriveAuthState.AccountMismatch -> {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(NoteCoral.copy(alpha = 0.12f))
+                                        .padding(14.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.ErrorOutline,
+                                            contentDescription = null,
+                                            tint = NoteCoral,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                        Text(
+                                            text = "Account Mismatch",
+                                            style = MaterialTheme.typography.titleSmall.copy(
+                                                fontFamily = OutfitFontFamily,
+                                                fontWeight = FontWeight.Bold,
+                                                color = NoteCoral
+                                            )
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    Text(
+                                        text = "Signed in as '${driveAuthState.firebaseEmail}', but Google Drive is authorized for '${driveAuthState.driveEmail}'. Uploads are paused to prevent cross-account mixing.",
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = OutfitFontFamily,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    )
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        if (onSwitchDriveAccount != null) {
+                                            Button(
+                                                onClick = onSwitchDriveAccount,
+                                                colors = ButtonDefaults.buttonColors(containerColor = NoteCoral),
+                                                shape = RoundedCornerShape(12.dp),
+                                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                            ) {
+                                                Text("Switch Drive Account", color = Color.White, fontFamily = OutfitFontFamily, fontSize = 12.sp)
+                                            }
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = onDisconnectDrive,
+                                            shape = RoundedCornerShape(12.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                        ) {
+                                            Text("Disconnect", fontFamily = OutfitFontFamily, fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+
                             is DriveAuthState.Authorizing -> {
                                 Row(
                                     modifier = Modifier

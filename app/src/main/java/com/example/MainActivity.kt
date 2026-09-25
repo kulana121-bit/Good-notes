@@ -296,7 +296,7 @@ fun NotesApp(
                         DocumentsScreen(
                             documents = documents,
                             onImportDocument = { uri -> viewModel.importDocument(uri) },
-                            onScanDeviceDocuments = { cb -> viewModel.scanDeviceDocuments(cb) },
+                            onScanFolder = { treeUri, cb -> viewModel.scanFolder(treeUri, cb) },
                             onDocumentClick = { doc -> viewModel.openDocument(doc) },
                             onToggleFavorite = { id -> viewModel.toggleDocumentFavorite(id) },
                             onDeleteDocument = { id -> viewModel.softDeleteDocument(id) },

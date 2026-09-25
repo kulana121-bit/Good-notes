@@ -45,12 +45,12 @@ class BackupManager(private val database: NotesDatabase) {
 
     private val adapter = moshi.adapter(NotesBackupDto::class.java)
 
-    suspend fun exportBackup(context: Context, destinationUri: Uri): Result<Int> = withContext(Dispatchers.IO) {
+    suspend fun exportBackup(context: Context, destinationUri: Uri, userId: String = ""): Result<Int> = withContext(Dispatchers.IO) {
         try {
-            val notes = database.noteDao().getAllNotesDirect()
-            val folders = database.folderDao().getAllFoldersDirect()
+            val notes = database.noteDao().getAllNotesDirect(userId)
+            val folders = database.folderDao().getAllFoldersDirect(userId)
             val settings = database.settingDao().getAllSettingsDirect()
-            val documents = database.documentDao().getAllDocumentsDirect()
+            val documents = database.documentDao().getAllDocumentsDirect(userId)
 
             val backupDto = NotesBackupDto(
                 formatVersion = 1,

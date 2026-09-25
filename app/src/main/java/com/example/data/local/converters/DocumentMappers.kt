@@ -45,9 +45,10 @@ object DocumentMappers {
         )
     }
 
-    fun toEntity(domain: Document): DocumentEntity {
+    fun toEntity(domain: Document, userId: String = ""): DocumentEntity {
         return DocumentEntity(
             id = domain.id,
+            userId = userId,
             fileName = domain.fileName,
             displayName = domain.displayName,
             localPath = domain.localPath,

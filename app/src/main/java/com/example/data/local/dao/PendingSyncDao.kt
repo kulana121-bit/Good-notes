@@ -12,14 +12,14 @@ import java.util.UUID
 @Dao
 interface PendingSyncDao {
 
-    @Query("SELECT * FROM pending_sync_operations ORDER BY createdAt ASC")
-    fun getAllPendingOperations(): Flow<List<PendingSyncOperation>>
+    @Query("SELECT * FROM pending_sync_operations WHERE userId = :userId ORDER BY createdAt ASC")
+    fun getAllPendingOperations(userId: String): Flow<List<PendingSyncOperation>>
 
-    @Query("SELECT * FROM pending_sync_operations ORDER BY createdAt ASC")
-    suspend fun getAllPendingOperationsDirect(): List<PendingSyncOperation>
+    @Query("SELECT * FROM pending_sync_operations WHERE userId = :userId ORDER BY createdAt ASC")
+    suspend fun getAllPendingOperationsDirect(userId: String): List<PendingSyncOperation>
 
-    @Query("SELECT * FROM pending_sync_operations WHERE entityId = :entityId")
-    suspend fun getPendingOperationsForEntity(entityId: String): List<PendingSyncOperation>
+    @Query("SELECT * FROM pending_sync_operations WHERE userId = :userId AND entityId = :entityId")
+    suspend fun getPendingOperationsForEntity(userId: String, entityId: String): List<PendingSyncOperation>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOperation(operation: PendingSyncOperation)
@@ -27,17 +27,23 @@ interface PendingSyncDao {
     @Query("DELETE FROM pending_sync_operations WHERE operationId = :operationId")
     suspend fun deleteOperation(operationId: String)
 
-    @Query("DELETE FROM pending_sync_operations WHERE entityId = :entityId")
-    suspend fun deleteOperationsForEntity(entityId: String)
+    @Query("DELETE FROM pending_sync_operations WHERE userId = :userId AND entityId = :entityId")
+    suspend fun deleteOperationsForEntity(userId: String, entityId: String)
+
+    @Query("DELETE FROM pending_sync_operations WHERE userId = :userId")
+    suspend fun clearOperationsForUser(userId: String)
 
     @Query("DELETE FROM pending_sync_operations")
     suspend fun clearAllOperations()
 
-    @Query("SELECT COUNT(*) FROM pending_sync_operations")
-    fun getPendingCount(): Flow<Int>
+    @Query("SELECT COUNT(*) FROM pending_sync_operations WHERE userId = :userId")
+    fun getPendingCount(userId: String): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM pending_sync_operations")
-    suspend fun getPendingCountDirect(): Int
+    fun getGlobalPendingCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM pending_sync_operations WHERE userId = :userId")
+    suspend fun getPendingCountDirect(userId: String): Int
 
     @Query("UPDATE pending_sync_operations SET retryCount = :retryCount, lastError = :lastError WHERE operationId = :operationId")
     suspend fun updateRetry(operationId: String, retryCount: Int, lastError: String?)
@@ -51,17 +57,19 @@ interface PendingSyncDao {
      * - DELETE + CREATE -> UPDATE
      */
     @Transaction
-    suspend fun enqueueCoalesced(
+    open suspend fun enqueueCoalesced(
+        userId: String = "",
         entityType: String,
         entityId: String,
         operationType: String,
         payloadJson: String? = null
     ) {
-        val existingOps = getPendingOperationsForEntity(entityId)
+        val existingOps = getPendingOperationsForEntity(userId, entityId)
         if (existingOps.isEmpty()) {
             insertOperation(
                 PendingSyncOperation(
                     operationId = "op_${UUID.randomUUID().toString().take(12)}",
+                    userId = userId,
                     entityType = entityType,
                     entityId = entityId,
                     operationType = operationType,

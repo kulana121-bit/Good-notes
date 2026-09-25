@@ -22,9 +22,10 @@ object NoteMappers {
     private val stringListType = Types.newParameterizedType(List::class.java, String::class.java)
     private val stringListAdapter = moshi.adapter<List<String>>(stringListType)
 
-    fun toEntity(note: Note): NoteEntity {
+    fun toEntity(note: Note, userId: String = ""): NoteEntity {
         return NoteEntity(
             id = note.id,
+            userId = userId,
             title = note.title,
             content = note.body,
             folder = note.folder,
@@ -93,9 +94,10 @@ object NoteMappers {
         )
     }
 
-    fun toFolderEntity(folder: Folder): FolderEntity {
+    fun toFolderEntity(folder: Folder, userId: String = ""): FolderEntity {
         return FolderEntity(
             id = folder.id,
+            userId = userId,
             name = folder.name,
             colorHex = folder.color.value.toLong(),
             createdAt = System.currentTimeMillis()

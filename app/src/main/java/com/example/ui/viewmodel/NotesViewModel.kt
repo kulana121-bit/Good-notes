@@ -26,7 +26,6 @@ import com.example.data.model.VisualCardType
 import com.example.data.remote.auth.FirebaseAuthService
 import com.example.data.remote.auth.UserSummary
 import com.example.data.remote.drive.DriveAuthState
-import com.example.data.remote.drive.DriveFolderStructure
 import com.example.data.remote.drive.DriveStorageInfo
 import com.example.data.remote.drive.DriveTestReport
 import com.example.data.remote.drive.GoogleDriveAuthManager
@@ -38,6 +37,7 @@ import com.example.data.sync.NotesSyncWorker
 import com.example.data.sync.SyncManager
 import com.example.data.sync.SyncReport
 import com.example.data.sync.SyncState
+import com.example.util.AudioPlayerManager
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -48,10 +48,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import com.example.util.AudioPlayerManager
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -73,61 +73,78 @@ class NotesViewModel(
 
     val audioPlayer: AudioPlayerManager = AudioPlayerManager(application)
 
-    val pendingOperationsCount = syncManager.pendingOperationsCount
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    // Current User & Active UID for strict Account Isolation
+    val currentUser: StateFlow<UserSummary?> = authService.currentUser
+    val currentUserId: StateFlow<String> = currentUser.map { it?.uid ?: "" }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, authService.getCurrentUserId() ?: "")
 
-    // Single source of truth from Room Database
-    private val rawNotes: StateFlow<List<Note>> = repository.allNotes
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val pendingOperationsCount: StateFlow<Int> = currentUserId.flatMapLatest { uid ->
+        repository.getPendingOperationsCount(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-    val favoriteNotes: StateFlow<List<Note>> = repository.favoriteNotes
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    // Reactive single source of truth from Room Database isolated by current user UID
+    private val rawNotes: StateFlow<List<Note>> = currentUserId.flatMapLatest { uid ->
+        repository.getActiveNotes(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val trashNotes: StateFlow<List<Note>> = repository.trashNotes
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val favoriteNotes: StateFlow<List<Note>> = currentUserId.flatMapLatest { uid ->
+        repository.getFavoriteNotes(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val folders: StateFlow<List<Folder>> = repository.folders
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val trashNotes: StateFlow<List<Note>> = currentUserId.flatMapLatest { uid ->
+        repository.getTrashNotes(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val folders: StateFlow<List<Folder>> = currentUserId.flatMapLatest { uid ->
+        repository.getFolders(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val isOnboardingCompleted: StateFlow<Boolean?> = repository.isOnboardingCompleted()
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    val activeNotesCount: StateFlow<Int> = repository.activeNotesCount
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    val activeNotesCount: StateFlow<Int> = currentUserId.flatMapLatest { uid ->
+        repository.getActiveNotesCount(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-    val favoritesCount: StateFlow<Int> = repository.favoritesCount
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    val favoritesCount: StateFlow<Int> = currentUserId.flatMapLatest { uid ->
+        repository.getFavoritesCount(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-    val trashCount: StateFlow<Int> = repository.trashCount
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    val trashCount: StateFlow<Int> = currentUserId.flatMapLatest { uid ->
+        repository.getTrashCount(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-    // Document management flows
-    val documents: StateFlow<List<Document>> = documentRepository.activeDocuments
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    // Document management flows isolated by current user UID
+    val documents: StateFlow<List<Document>> = currentUserId.flatMapLatest { uid ->
+        documentRepository.getActiveDocuments(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val favoriteDocuments: StateFlow<List<Document>> = documentRepository.favoriteDocuments
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val favoriteDocuments: StateFlow<List<Document>> = currentUserId.flatMapLatest { uid ->
+        documentRepository.getFavoriteDocuments(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val trashDocuments: StateFlow<List<Document>> = documentRepository.trashDocuments
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val trashDocuments: StateFlow<List<Document>> = currentUserId.flatMapLatest { uid ->
+        documentRepository.getTrashDocuments(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val activeDocumentsCount: StateFlow<Int> = documentRepository.activeDocumentsCount
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    val activeDocumentsCount: StateFlow<Int> = currentUserId.flatMapLatest { uid ->
+        documentRepository.getActiveDocumentsCount(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-    val totalDocumentsSize: StateFlow<Long> = documentRepository.totalDocumentsSize
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+    val totalDocumentsSize: StateFlow<Long> = currentUserId.flatMapLatest { uid ->
+        documentRepository.getTotalDocumentsSize(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
     private val _selectedDocument = MutableStateFlow<Document?>(null)
     val selectedDocument: StateFlow<Document?> = _selectedDocument.asStateFlow()
 
     // Auth & Sync flows
-    val currentUser: StateFlow<UserSummary?> = authService.currentUser
     val syncState: StateFlow<SyncState> = syncManager.syncState
     val lastSyncTimestamp: StateFlow<Long> = syncManager.lastSyncTimestamp
     val lastSyncReport: StateFlow<SyncReport?> = syncManager.lastSyncReport
     val documentMigrationState: StateFlow<DocumentMigrationState> = syncManager.migrationManager.migrationState
 
-    // Instant in-memory theme state synced with Room database for zero-latency switching
+    // Instant theme state
     private val _isDarkModeState = MutableStateFlow(true)
     val isDarkMode: StateFlow<Boolean> = _isDarkModeState.asStateFlow()
 
@@ -143,7 +160,7 @@ class NotesViewModel(
     val defaultSortOrder: StateFlow<String> = repository.getDefaultSortOrder()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Recently Modified")
 
-    // Sorted notes according to user preference
+    // Sorted notes
     val notes: StateFlow<List<Note>> = combine(rawNotes, defaultSortOrder) { list, sortOrder ->
         when (sortOrder) {
             "Alphabetical (A-Z)" -> list.sortedBy { it.title.lowercase() }
@@ -173,12 +190,16 @@ class NotesViewModel(
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    val searchResults: StateFlow<List<Note>> = _searchQuery.flatMapLatest { query ->
-        repository.searchNotes(query)
+    val searchResults: StateFlow<List<Note>> = combine(_searchQuery, currentUserId) { query, uid ->
+        query to uid
+    }.flatMapLatest { (query, uid) ->
+        repository.searchNotes(uid, query)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val searchDocumentResults: StateFlow<List<Document>> = _searchQuery.flatMapLatest { query ->
-        documentRepository.searchDocuments(query)
+    val searchDocumentResults: StateFlow<List<Document>> = combine(_searchQuery, currentUserId) { query, uid ->
+        query to uid
+    }.flatMapLatest { (query, uid) ->
+        documentRepository.searchDocuments(uid, query)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _isNavigationSheetOpen = MutableStateFlow(false)
@@ -193,7 +214,7 @@ class NotesViewModel(
     private val _isHighlightActive = MutableStateFlow(false)
     val isHighlightActive: StateFlow<Boolean> = _isHighlightActive.asStateFlow()
 
-    // Google Drive Integration Foundation
+    // Google Drive Integration & Account Mismatch States
     private val _driveAuthState = MutableStateFlow<DriveAuthState>(DriveAuthState.Disconnected)
     val driveAuthState: StateFlow<DriveAuthState> = _driveAuthState.asStateFlow()
 
@@ -229,18 +250,18 @@ class NotesViewModel(
     val availableCloudBackup: StateFlow<CloudBackupDto?> = _availableCloudBackup.asStateFlow()
 
     init {
+        // Observe current user changes to initialize folders and verify drive status
         viewModelScope.launch {
-            try {
-                repository.seedInitialDataIfNeeded()
-            } catch (t: Throwable) {
-                Log.w("NotesViewModel", "seedInitialDataIfNeeded warning: ${t.message}")
-            }
-            try {
-                checkForAvailableCloudBackup()
-            } catch (t: Throwable) {
-                Log.w("NotesViewModel", "checkForAvailableCloudBackup warning: ${t.message}")
+            currentUserId.collect { uid ->
+                try {
+                    repository.seedInitialDataIfNeeded(uid)
+                } catch (t: Throwable) {
+                    Log.w("NotesViewModel", "seedInitialDataIfNeeded warning: ${t.message}")
+                }
+                refreshDriveStatus()
             }
         }
+
         viewModelScope.launch {
             try {
                 repository.isDarkMode().collect { persistedMode ->
@@ -250,18 +271,11 @@ class NotesViewModel(
                 Log.w("NotesViewModel", "DarkMode flow warning: ${t.message}")
             }
         }
-        // Schedule background periodic cloud sync via WorkManager
+
         try {
             NotesSyncWorker.schedulePeriodicSync(application)
         } catch (t: Throwable) {
             Log.w("NotesViewModel", "WorkManager schedule warning: ${t.message}")
-        }
-
-        // Initialize Google Drive connection status
-        try {
-            refreshDriveStatus()
-        } catch (t: Throwable) {
-            Log.w("NotesViewModel", "Google Drive status check warning: ${t.message}")
         }
     }
 
@@ -284,7 +298,6 @@ class NotesViewModel(
     }
 
     fun navigateBack(): Boolean {
-        // If leaving editor, make sure pending autosave is flushed
         if (_currentDestination.value == NavDestination.NOTE_EDITOR) {
             flushPendingSave()
         }
@@ -298,10 +311,8 @@ class NotesViewModel(
         return false
     }
 
-    /**
-     * Tap + creates a REAL database note and opens it in editor.
-     */
     fun openNoteEditor(note: Note?) {
+        val uid = currentUserId.value
         if (note != null) {
             _selectedNote.value = note
             _saveStatus.value = SaveStatus.SAVED
@@ -318,7 +329,7 @@ class NotesViewModel(
                 updatedAt = System.currentTimeMillis()
             )
             viewModelScope.launch {
-                repository.saveNote(newNote)
+                repository.saveNote(newNote, uid)
             }
             _selectedNote.value = newNote
             _saveStatus.value = SaveStatus.SAVED
@@ -326,17 +337,14 @@ class NotesViewModel(
         }
     }
 
-    /**
-     * Debounced autosave implementation (400-700ms).
-     */
     fun onNoteContentChanged(updatedNote: Note) {
         _selectedNote.value = updatedNote
         _saveStatus.value = SaveStatus.SAVING
 
         autosaveJob?.cancel()
         autosaveJob = viewModelScope.launch {
-            delay(500) // 500ms debounce
-            repository.saveNote(updatedNote)
+            delay(500)
+            repository.saveNote(updatedNote, currentUserId.value)
             _saveStatus.value = SaveStatus.SAVED
         }
     }
@@ -346,7 +354,7 @@ class NotesViewModel(
         _selectedNote.value = updatedNote
         viewModelScope.launch {
             _saveStatus.value = SaveStatus.SAVING
-            repository.saveNote(updatedNote)
+            repository.saveNote(updatedNote, currentUserId.value)
             _saveStatus.value = SaveStatus.SAVED
         }
     }
@@ -355,14 +363,14 @@ class NotesViewModel(
         autosaveJob?.cancel()
         val note = _selectedNote.value ?: return
         viewModelScope.launch {
-            repository.saveNote(note)
+            repository.saveNote(note, currentUserId.value)
             _saveStatus.value = SaveStatus.SAVED
         }
     }
 
     fun toggleFavorite(noteId: String) {
         viewModelScope.launch {
-            repository.toggleFavorite(noteId)
+            repository.toggleFavorite(noteId, currentUserId.value)
         }
         if (_selectedNote.value?.id == noteId) {
             _selectedNote.update { it?.copy(isFavorite = !(it.isFavorite)) }
@@ -377,13 +385,13 @@ class NotesViewModel(
             navigateBack()
         }
         viewModelScope.launch {
-            repository.softDeleteNote(noteId)
+            repository.softDeleteNote(noteId, currentUserId.value)
         }
     }
 
     fun restoreNote(noteId: String) {
         viewModelScope.launch {
-            repository.restoreNote(noteId)
+            repository.restoreNote(noteId, currentUserId.value)
         }
     }
 
@@ -393,14 +401,14 @@ class NotesViewModel(
             _selectedNote.value = null
         }
         viewModelScope.launch {
-            repository.permanentlyDeleteNote(noteId)
+            repository.permanentlyDeleteNote(noteId, currentUserId.value)
         }
     }
 
     fun emptyTrash() {
         autosaveJob?.cancel()
         viewModelScope.launch {
-            repository.emptyTrash()
+            repository.emptyTrash(currentUserId.value)
         }
     }
 
@@ -433,42 +441,52 @@ class NotesViewModel(
 
     fun moveNoteToFolder(noteId: String, folderName: String) {
         viewModelScope.launch {
-            repository.moveNoteToFolder(noteId, folderName)
+            repository.moveNoteToFolder(noteId, folderName, currentUserId.value)
         }
     }
 
     fun createFolder(name: String, color: Color, onResult: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            val success = repository.createFolder(name, color)
+            val success = repository.createFolder(name, color, currentUserId.value)
             onResult(success)
         }
     }
 
     fun renameFolder(oldName: String, newName: String, onResult: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            val success = repository.renameFolder(oldName, newName)
+            val success = repository.renameFolder(oldName, newName, currentUserId.value)
             onResult(success)
         }
     }
 
     fun deleteFolder(folder: Folder) {
         viewModelScope.launch {
-            repository.deleteFolder(folder.id, folder.name, fallbackFolder = "Personal")
+            repository.deleteFolder(folder.id, folder.name, fallbackFolder = "Personal", userId = currentUserId.value)
             if (_selectedFolder.value?.id == folder.id) {
                 _selectedFolder.value = null
             }
         }
     }
 
-    // Document handling
+    // Document handling with modern SAF & User Isolation
     fun importDocument(uri: Uri, onResult: (Result<Document>) -> Unit = {}) {
         viewModelScope.launch {
-            val result = documentRepository.importPdf(uri, getApplication())
+            val result = documentRepository.importPdf(uri, getApplication(), currentUserId.value)
             if (result.isSuccess) {
-                // Instantly trigger sync to Google Drive
-                syncManager.syncNow()
+                syncManager.syncNow(currentUserId.value)
             }
             onResult(result)
+        }
+    }
+
+    fun scanFolder(treeUri: Uri, onResult: (Int) -> Unit = {}) {
+        viewModelScope.launch {
+            val result = documentRepository.scanFolderViaTreeUri(getApplication(), treeUri, currentUserId.value)
+            val count = result.getOrDefault(0)
+            if (count > 0) {
+                syncManager.syncNow(currentUserId.value)
+            }
+            onResult(count)
         }
     }
 
@@ -520,18 +538,6 @@ class NotesViewModel(
         }
     }
 
-    fun scanDeviceDocuments(onResult: (Int) -> Unit = {}) {
-        viewModelScope.launch {
-            val result = documentRepository.scanDevicePdfDocuments(getApplication())
-            val count = result.getOrDefault(0)
-            if (count > 0) {
-                // Immediately trigger cloud and Google Drive sync for newly discovered PDFs
-                syncManager.syncNow()
-            }
-            onResult(count)
-        }
-    }
-
     fun createVoiceNote(audioFile: File, durationMs: Long, customTitle: String? = null) {
         val timeLabel = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date())
         val title = customTitle ?: "Voice Note $timeLabel"
@@ -577,12 +583,15 @@ class NotesViewModel(
         }
     }
 
-    // Cloud Auth & Sync
+    // Cloud Auth & Safe Account Switching
     fun signInWithGoogle(activityContext: Context? = null, webClientId: String? = null, onResult: (Result<UserSummary>) -> Unit) {
         viewModelScope.launch {
+            NotesCloudSyncWorker.cancelSync(getApplication())
             val result = authService.signInWithGoogle(activityContext, webClientId)
             if (result.isSuccess) {
-                syncManager.syncNow()
+                val user = result.getOrThrow()
+                refreshDriveStatus()
+                syncManager.syncNow(user.uid)
             }
             onResult(result)
         }
@@ -590,9 +599,12 @@ class NotesViewModel(
 
     fun switchGoogleAccount(activityContext: Context? = null, webClientId: String? = null, onResult: (Result<UserSummary>) -> Unit) {
         viewModelScope.launch {
+            NotesCloudSyncWorker.cancelSync(getApplication())
             val result = authService.switchGoogleAccount(activityContext, webClientId)
             if (result.isSuccess) {
-                syncManager.syncNow()
+                val user = result.getOrThrow()
+                refreshDriveStatus()
+                syncManager.syncNow(user.uid)
             }
             onResult(result)
         }
@@ -600,9 +612,12 @@ class NotesViewModel(
 
     fun signInWithEmail(email: String, pass: String, onResult: (Result<UserSummary>) -> Unit) {
         viewModelScope.launch {
+            NotesCloudSyncWorker.cancelSync(getApplication())
             val result = authService.signInWithEmail(email, pass)
             if (result.isSuccess) {
-                syncManager.syncNow()
+                val user = result.getOrThrow()
+                refreshDriveStatus()
+                syncManager.syncNow(user.uid)
             }
             onResult(result)
         }
@@ -610,9 +625,12 @@ class NotesViewModel(
 
     fun signUpWithEmail(email: String, pass: String, name: String, onResult: (Result<UserSummary>) -> Unit) {
         viewModelScope.launch {
+            NotesCloudSyncWorker.cancelSync(getApplication())
             val result = authService.signUpWithEmail(email, pass, name)
             if (result.isSuccess) {
-                syncManager.syncNow()
+                val user = result.getOrThrow()
+                refreshDriveStatus()
+                syncManager.syncNow(user.uid)
             }
             onResult(result)
         }
@@ -620,9 +638,12 @@ class NotesViewModel(
 
     fun signInAnonymously(onResult: (Result<UserSummary>) -> Unit) {
         viewModelScope.launch {
+            NotesCloudSyncWorker.cancelSync(getApplication())
             val result = authService.signInAnonymously()
             if (result.isSuccess) {
-                syncManager.syncNow()
+                val user = result.getOrThrow()
+                refreshDriveStatus()
+                syncManager.syncNow(user.uid)
             }
             onResult(result)
         }
@@ -630,12 +651,12 @@ class NotesViewModel(
 
     fun signOut(onResult: (Result<Unit>) -> Unit = {}) {
         viewModelScope.launch {
-            // Cancel background cloud sync tasks to prevent stale sync
             NotesCloudSyncWorker.cancelSync(getApplication())
-            // Clear cached folder identities
+            driveAuthManager.disconnect()
             driveService.clearCache()
             _driveAuthState.value = DriveAuthState.Disconnected
             _driveStorageInfo.value = null
+            _lastDriveTestReport.value = null
 
             val result = authService.signOut()
             onResult(result)
@@ -644,14 +665,15 @@ class NotesViewModel(
 
     fun syncNow(onResult: (Result<SyncReport>) -> Unit = {}) {
         viewModelScope.launch {
-            val result = syncManager.syncNow()
+            val result = syncManager.syncNow(currentUserId.value)
             onResult(result)
         }
     }
 
     fun refreshDriveStatus() {
         viewModelScope.launch {
-            val authState = driveService.checkAuthorization()
+            val expectedEmail = authService.currentUser.value?.email
+            val authState = driveService.checkAuthorization(expectedEmail = expectedEmail)
             _driveAuthState.value = authState
             if (authState is DriveAuthState.Connected) {
                 val quotaResult = driveService.getStorageQuota()
@@ -676,7 +698,6 @@ class NotesViewModel(
         viewModelScope.launch {
             val result = driveAuthManager.handleAuthorizationResult(data)
             if (result.isSuccess) {
-                _driveAuthState.value = result.getOrThrow()
                 refreshDriveStatus()
             } else {
                 _driveAuthState.value = DriveAuthState.Error(result.exceptionOrNull()?.localizedMessage ?: "Authorization failed")
@@ -688,6 +709,7 @@ class NotesViewModel(
     fun disconnectDrive(onResult: (Result<Unit>) -> Unit = {}) {
         viewModelScope.launch {
             val result = driveAuthManager.disconnect()
+            driveService.clearCache()
             _driveAuthState.value = DriveAuthState.Disconnected
             _driveStorageInfo.value = null
             _lastDriveTestReport.value = null
@@ -744,8 +766,8 @@ class NotesViewModel(
 
     fun checkForAvailableCloudBackup() {
         viewModelScope.launch {
-            val count = repository.activeNotesCount.firstOrNull() ?: 0
-            if (count == 0 && driveService.checkAuthorization() is DriveAuthState.Connected) {
+            val count = activeNotesCount.value
+            if (count == 0 && driveService.checkAuthorization(authService.currentUser.value?.email) is DriveAuthState.Connected) {
                 val backupRes = cloudBackupManager.checkForCloudBackup()
                 if (backupRes.isSuccess) {
                     _availableCloudBackup.value = backupRes.getOrNull()

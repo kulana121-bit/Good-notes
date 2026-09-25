@@ -1,14 +1,12 @@
 package com.example.data.repository
 
-import android.content.ContentUris
 import android.content.Context
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
-import android.os.Environment
 import android.os.ParcelFileDescriptor
-import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.documentfile.provider.DocumentFile
 import com.example.data.local.converters.DocumentMappers
 import com.example.data.local.dao.DocumentDao
 import com.example.data.local.entity.DocumentEntity
@@ -39,32 +37,38 @@ class DocumentRepository(
         0xFF7CC4FA  // Sky Blue
     )
 
-    val activeDocuments: Flow<List<Document>> = documentDao.getActiveDocuments().map { list ->
-        list.map { DocumentMappers.toDomain(it) }
-    }
+    fun getActiveDocuments(userId: String): Flow<List<Document>> =
+        documentDao.getActiveDocuments(userId).map { list ->
+            list.map { DocumentMappers.toDomain(it) }
+        }
 
-    val favoriteDocuments: Flow<List<Document>> = documentDao.getFavoriteDocuments().map { list ->
-        list.map { DocumentMappers.toDomain(it) }
-    }
+    fun getFavoriteDocuments(userId: String): Flow<List<Document>> =
+        documentDao.getFavoriteDocuments(userId).map { list ->
+            list.map { DocumentMappers.toDomain(it) }
+        }
 
-    val recentDocuments: Flow<List<Document>> = documentDao.getRecentDocuments(10).map { list ->
-        list.map { DocumentMappers.toDomain(it) }
-    }
+    fun getRecentDocuments(userId: String, limit: Int = 10): Flow<List<Document>> =
+        documentDao.getRecentDocuments(userId, limit).map { list ->
+            list.map { DocumentMappers.toDomain(it) }
+        }
 
-    val trashDocuments: Flow<List<Document>> = documentDao.getTrashDocuments().map { list ->
-        list.map { DocumentMappers.toDomain(it) }
-    }
+    fun getTrashDocuments(userId: String): Flow<List<Document>> =
+        documentDao.getTrashDocuments(userId).map { list ->
+            list.map { DocumentMappers.toDomain(it) }
+        }
 
-    val activeDocumentsCount: Flow<Int> = documentDao.getActiveDocumentsCount()
+    fun getActiveDocumentsCount(userId: String): Flow<Int> =
+        documentDao.getActiveDocumentsCount(userId)
 
-    val totalDocumentsSize: Flow<Long> = documentDao.getTotalDocumentsSize().map { it ?: 0L }
+    fun getTotalDocumentsSize(userId: String): Flow<Long> =
+        documentDao.getTotalDocumentsSize(userId).map { it ?: 0L }
 
-    fun searchDocuments(query: String): Flow<List<Document>> {
+    fun searchDocuments(userId: String, query: String): Flow<List<Document>> {
         val trimmed = query.trim()
         return if (trimmed.isEmpty()) {
-            activeDocuments
+            getActiveDocuments(userId)
         } else {
-            documentDao.searchDocuments(trimmed).map { list ->
+            documentDao.searchDocuments(userId, trimmed).map { list ->
                 list.map { DocumentMappers.toDomain(it) }
             }
         }
@@ -80,231 +84,172 @@ class DocumentRepository(
         return documentDao.getDocumentByIdDirect(id)?.let { DocumentMappers.toDomain(it) }
     }
 
-    suspend fun getAllDocumentsDirect(): List<Document> {
-        return documentDao.getAllDocumentsDirect().map { DocumentMappers.toDomain(it) }
+    suspend fun getAllDocumentsDirect(userId: String): List<Document> {
+        return documentDao.getAllDocumentsDirect(userId).map { DocumentMappers.toDomain(it) }
     }
 
     /**
-     * Scans the device in real-time for PDF documents, copies them safely to app-internal storage,
-     * computes content hashes for deduplication, generates thumbnails, and stages them for Google Drive sync.
+     * Recursively scans a selected directory tree via Android Storage Access Framework (SAF)
+     * using DocumentFile, copies each discovered PDF into app-private storage,
+     * calculates SHA-256 for deduplication, generates thumbnails, and stages them for Drive sync.
      */
-    suspend fun scanDevicePdfDocuments(context: Context): Result<Int> = withContext(Dispatchers.IO) {
+    suspend fun scanFolderViaTreeUri(
+        context: Context,
+        treeUri: Uri,
+        userId: String
+    ): Result<Int> = withContext(Dispatchers.IO) {
         try {
-            var scannedCount = 0
-            val existingDocs = documentDao.getAllDocumentsDirect()
-            val existingHashes = existingDocs.mapNotNull { it.contentHash }.toSet()
-            val existingNamesAndSizes = existingDocs.map { "${it.fileName}_${it.fileSize}" }.toSet()
+            val rootDoc = DocumentFile.fromTreeUri(context, treeUri)
+                ?: return@withContext Result.failure(IllegalArgumentException("Could not open selected folder"))
 
-            // 1. Scan via MediaStore
-            try {
-                val projection = arrayOf(
-                    MediaStore.Files.FileColumns._ID,
-                    MediaStore.Files.FileColumns.DISPLAY_NAME,
-                    MediaStore.Files.FileColumns.SIZE,
-                    MediaStore.Files.FileColumns.DATE_MODIFIED
-                )
+            var importedCount = 0
+            val queue = ArrayDeque<DocumentFile>()
+            queue.add(rootDoc)
 
-                val selection = "${MediaStore.Files.FileColumns.MIME_TYPE} = ? OR ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE '%.pdf'"
-                val selectionArgs = arrayOf("application/pdf")
+            val maxDepth = 6
+            var currentDepth = 0
 
-                context.contentResolver.query(
-                    MediaStore.Files.getContentUri("external"),
-                    projection,
-                    selection,
-                    selectionArgs,
-                    "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
-                )?.use { cursor ->
-                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
-                    val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
-                    val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
-                    val modCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
+            while (queue.isNotEmpty() && currentDepth < maxDepth) {
+                val levelSize = queue.size
+                for (i in 0 until levelSize) {
+                    val currentDir = queue.removeFirst()
+                    val files = try {
+                        currentDir.listFiles()
+                    } catch (e: Exception) {
+                        Log.w(tag, "Could not list files in directory: ${e.message}")
+                        emptyArray()
+                    }
 
-                    while (cursor.moveToNext()) {
-                        val mediaId = cursor.getLong(idCol)
-                        val rawFileName = cursor.getString(nameCol) ?: "document_$mediaId.pdf"
-                        val safeFileName = SecurityUtils.sanitizeFileName(rawFileName)
-                        val size = cursor.getLong(sizeCol)
-                        val modDate = cursor.getLong(modCol) * 1000L
-                        val contentUri = ContentUris.withAppendedId(MediaStore.Files.getContentUri("external"), mediaId)
-
-                        if (size > 0 && !existingNamesAndSizes.contains("${safeFileName}_$size")) {
-                            val docId = "doc_ms_${UUID.randomUUID().toString().take(8)}"
-                            val destinationFile = SecurityUtils.getSafeDocumentFile(context, docId, safeFileName)
-
-                            val digest = MessageDigest.getInstance("SHA-256")
-                            var copySuccess = false
-                            try {
-                                context.contentResolver.openInputStream(contentUri)?.use { input ->
-                                    FileOutputStream(destinationFile).use { output ->
-                                        val buffer = ByteArray(16384)
-                                        var read: Int
-                                        while (input.read(buffer).also { read = it } != -1) {
-                                            digest.update(buffer, 0, read)
-                                            output.write(buffer, 0, read)
-                                        }
-                                        output.flush()
-                                    }
-                                    copySuccess = destinationFile.length() > 0
-                                }
-                            } catch (streamErr: Exception) {
-                                Log.w(tag, "Could not copy MediaStore file $mediaId: ${streamErr.message}")
-                                destinationFile.delete()
-                            }
-
-                            if (copySuccess) {
-                                val fileSize = destinationFile.length()
-                                val contentHash = digest.digest().joinToString("") { "%02x".format(it) }
-
-                                if (existingHashes.contains(contentHash)) {
-                                    destinationFile.delete()
-                                } else {
-                                    var pageCount = 1
-                                    try {
-                                        ParcelFileDescriptor.open(destinationFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-                                            PdfRenderer(pfd).use { renderer ->
-                                                pageCount = renderer.pageCount
-                                            }
-                                        }
-                                    } catch (_: Exception) {}
-
-                                    val accentColor = accentColors[(destinationFile.absolutePath.hashCode() and 0x7FFFFFFF) % accentColors.size]
-                                    val displayName = safeFileName.removeSuffix(".pdf").replace("_", " ").trim()
-                                    val thumb = PdfThumbnailHelper.generateThumbnail(context, docId, destinationFile)
-
-                                    val docEntity = DocumentEntity(
-                                        id = docId,
-                                        fileName = safeFileName,
-                                        displayName = displayName.ifBlank { "Scanned Document" },
-                                        localPath = destinationFile.absolutePath,
-                                        fileSize = fileSize,
-                                        mimeType = "application/pdf",
-                                        contentHash = contentHash,
-                                        pageCount = pageCount.coerceAtLeast(1),
-                                        createdAt = if (modDate > 0) modDate else System.currentTimeMillis(),
-                                        updatedAt = System.currentTimeMillis(),
-                                        lastOpenedAt = System.currentTimeMillis(),
-                                        lastOpenedPage = 0,
-                                        isFavorite = false,
-                                        isDeleted = false,
-                                        syncStatus = "PENDING",
-                                        downloadState = "AVAILABLE_OFFLINE",
-                                        uploadState = "PENDING_UPLOAD",
-                                        thumbnailPath = thumb,
-                                        accentColorHex = accentColor
-                                    )
-                                    documentDao.insertDocument(docEntity)
-                                    scannedCount++
-                                }
+                    for (file in files) {
+                        if (file.isDirectory) {
+                            queue.add(file)
+                        } else if (isPdfFile(file)) {
+                            val importResult = importFromDocumentFile(context, file, userId)
+                            if (importResult.isSuccess) {
+                                importedCount++
                             }
                         }
                     }
                 }
-            } catch (e: Exception) {
-                Log.w(tag, "MediaStore PDF query warning: ${e.message}")
+                currentDepth++
             }
 
-            // 2. Scan standard directories (Downloads, Documents)
-            val targetDirs = listOfNotNull(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
-                context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS),
-                context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            Log.i(tag, "Tree scan completed for user '$userId'. Discovered & indexed $importedCount new PDF files.")
+            Result.success(importedCount)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed scanning folder tree via SAF", e)
+            Result.failure(e)
+        }
+    }
+
+    private fun isPdfFile(file: DocumentFile): Boolean {
+        val name = file.name.orEmpty()
+        val type = file.type.orEmpty()
+        return type.equals("application/pdf", ignoreCase = true) ||
+                name.endsWith(".pdf", ignoreCase = true)
+    }
+
+    private suspend fun importFromDocumentFile(
+        context: Context,
+        docFile: DocumentFile,
+        userId: String
+    ): Result<DocumentEntity> = withContext(Dispatchers.IO) {
+        val rawName = docFile.name ?: "document_${System.currentTimeMillis()}.pdf"
+        val safeName = SecurityUtils.sanitizeFileName(rawName)
+        val docId = "doc_${UUID.randomUUID().toString().take(8)}"
+
+        val destinationFile = SecurityUtils.getSafeDocumentFile(context, docId, safeName)
+        val tempFile = File(destinationFile.parentFile, "${destinationFile.name}.scan_${System.currentTimeMillis()}.tmp")
+
+        try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val inputStream = context.contentResolver.openInputStream(docFile.uri)
+                ?: return@withContext Result.failure(IllegalStateException("Cannot open input stream for: ${docFile.uri}"))
+
+            inputStream.use { input ->
+                FileOutputStream(tempFile).use { output ->
+                    val buffer = ByteArray(16384)
+                    var read: Int
+                    while (input.read(buffer).also { read = it } != -1) {
+                        digest.update(buffer, 0, read)
+                        output.write(buffer, 0, read)
+                    }
+                    output.flush()
+                }
+            }
+
+            val fileSize = tempFile.length()
+            if (fileSize == 0L) {
+                tempFile.delete()
+                return@withContext Result.failure(IllegalStateException("Discovered file is empty (0 bytes)"))
+            }
+
+            val contentHash = digest.digest().joinToString("") { "%02x".format(it) }
+
+            // Deduplication check for this user
+            val existing = documentDao.findDocumentByHashAndSize(userId, contentHash, fileSize)
+            if (existing != null && !existing.isDeleted) {
+                tempFile.delete()
+                Log.d(tag, "Duplicate document skipped: ${existing.displayName} (${existing.id})")
+                return@withContext Result.success(existing)
+            }
+
+            if (!tempFile.renameTo(destinationFile)) {
+                tempFile.copyTo(destinationFile, overwrite = true)
+                tempFile.delete()
+            }
+
+            var pageCount = 1
+            try {
+                ParcelFileDescriptor.open(destinationFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                    PdfRenderer(pfd).use { renderer ->
+                        pageCount = renderer.pageCount
+                    }
+                }
+            } catch (_: Exception) {}
+
+            val accentColor = accentColors[(destinationFile.absolutePath.hashCode() and 0x7FFFFFFF) % accentColors.size]
+            val displayName = safeName.removeSuffix(".pdf").replace("_", " ").trim().ifBlank { "Document" }
+            val thumb = PdfThumbnailHelper.generateThumbnail(context, docId, destinationFile)
+
+            val entity = DocumentEntity(
+                id = docId,
+                userId = userId,
+                fileName = safeName,
+                displayName = displayName,
+                localPath = destinationFile.absolutePath,
+                fileSize = fileSize,
+                mimeType = "application/pdf",
+                contentHash = contentHash,
+                pageCount = pageCount.coerceAtLeast(1),
+                createdAt = docFile.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis(),
+                updatedAt = docFile.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis(),
+                lastOpenedAt = System.currentTimeMillis(),
+                lastOpenedPage = 0,
+                lastSyncedAt = 0L,
+                isFavorite = false,
+                isDeleted = false,
+                syncStatus = "PENDING",
+                downloadState = "AVAILABLE_OFFLINE",
+                uploadState = "PENDING_UPLOAD",
+                thumbnailPath = thumb,
+                accentColorHex = accentColor
             )
 
-            for (dir in targetDirs) {
-                if (dir.exists() && dir.isDirectory) {
-                    val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".pdf", ignoreCase = true) } ?: emptyArray()
-                    for (file in files) {
-                        val safeFileName = SecurityUtils.sanitizeFileName(file.name)
-                        val size = file.length()
-                        if (size > 0 && !existingNamesAndSizes.contains("${safeFileName}_$size")) {
-                            val docId = "doc_f_${UUID.randomUUID().toString().take(8)}"
-                            val destinationFile = SecurityUtils.getSafeDocumentFile(context, docId, safeFileName)
-
-                            val digest = MessageDigest.getInstance("SHA-256")
-                            var copySuccess = false
-                            try {
-                                file.inputStream().use { input ->
-                                    FileOutputStream(destinationFile).use { output ->
-                                        val buffer = ByteArray(16384)
-                                        var read: Int
-                                        while (input.read(buffer).also { read = it } != -1) {
-                                            digest.update(buffer, 0, read)
-                                            output.write(buffer, 0, read)
-                                        }
-                                        output.flush()
-                                    }
-                                    copySuccess = destinationFile.length() > 0
-                                }
-                            } catch (streamErr: Exception) {
-                                Log.w(tag, "Could not copy file from ${file.absolutePath}: ${streamErr.message}")
-                                destinationFile.delete()
-                            }
-
-                            if (copySuccess) {
-                                val fileSize = destinationFile.length()
-                                val contentHash = digest.digest().joinToString("") { "%02x".format(it) }
-
-                                if (existingHashes.contains(contentHash)) {
-                                    destinationFile.delete()
-                                } else {
-                                    var pageCount = 1
-                                    try {
-                                        ParcelFileDescriptor.open(destinationFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-                                            PdfRenderer(pfd).use { renderer ->
-                                                pageCount = renderer.pageCount
-                                            }
-                                        }
-                                    } catch (_: Exception) {}
-
-                                    val accentColor = accentColors[(destinationFile.absolutePath.hashCode() and 0x7FFFFFFF) % accentColors.size]
-                                    val displayName = safeFileName.removeSuffix(".pdf").replace("_", " ").trim()
-                                    val thumb = PdfThumbnailHelper.generateThumbnail(context, docId, destinationFile)
-
-                                    val docEntity = DocumentEntity(
-                                        id = docId,
-                                        fileName = safeFileName,
-                                        displayName = displayName.ifBlank { "Scanned Document" },
-                                        localPath = destinationFile.absolutePath,
-                                        fileSize = fileSize,
-                                        mimeType = "application/pdf",
-                                        contentHash = contentHash,
-                                        pageCount = pageCount.coerceAtLeast(1),
-                                        createdAt = file.lastModified(),
-                                        updatedAt = System.currentTimeMillis(),
-                                        lastOpenedAt = System.currentTimeMillis(),
-                                        lastOpenedPage = 0,
-                                        isFavorite = false,
-                                        isDeleted = false,
-                                        syncStatus = "PENDING",
-                                        downloadState = "AVAILABLE_OFFLINE",
-                                        uploadState = "PENDING_UPLOAD",
-                                        thumbnailPath = thumb,
-                                        accentColorHex = accentColor
-                                    )
-                                    documentDao.insertDocument(docEntity)
-                                    scannedCount++
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Log.i(tag, "scanDevicePdfDocuments completed: $scannedCount new PDFs discovered & stored")
-            Result.success(scannedCount)
+            documentDao.insertDocument(entity)
+            Log.i(tag, "Imported device PDF: $displayName ($docId) to ${destinationFile.absolutePath}")
+            Result.success(entity)
         } catch (e: Exception) {
-            Log.e(tag, "Failed to scan device PDFs", e)
+            tempFile.delete()
+            Log.e(tag, "Failed importing PDF file ${docFile.name}", e)
             Result.failure(e)
         }
     }
 
     /**
-     * Imports a PDF from an Android system URI into app-private storage.
-     * Computes SHA-256 hash for deduplication, generates a lightweight thumbnail,
-     * and sets uploadState = PENDING_UPLOAD so it synchronizes automatically to Drive.
+     * Imports a PDF from an Android system URI (OpenDocument contract) into app-private storage.
      */
-    suspend fun importPdf(uri: Uri, context: Context): Result<Document> = withContext(Dispatchers.IO) {
+    suspend fun importPdf(uri: Uri, context: Context, userId: String): Result<Document> = withContext(Dispatchers.IO) {
         try {
             var rawFileName = "document_${System.currentTimeMillis()}.pdf"
             context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -336,10 +281,9 @@ class DocumentRepository(
             val fileSize = destinationFile.length()
             val contentHash = digest.digest().joinToString("") { "%02x".format(it) }
 
-            // Deduplication check
-            val existingDoc = documentDao.findDocumentByHashAndSize(contentHash, fileSize)
+            // Deduplication check for this user
+            val existingDoc = documentDao.findDocumentByHashAndSize(userId, contentHash, fileSize)
             if (existingDoc != null && !existingDoc.isDeleted) {
-                // Same content already imported: clean up duplicate copy and return existing
                 destinationFile.delete()
                 Log.d(tag, "Identical document already exists: ${existingDoc.id}. Reusing existing entry.")
                 return@withContext Result.success(DocumentMappers.toDomain(existingDoc))
@@ -360,6 +304,7 @@ class DocumentRepository(
 
             val entity = DocumentEntity(
                 id = docId,
+                userId = userId,
                 fileName = safeFileName,
                 displayName = displayName.ifBlank { "Document" },
                 localPath = destinationFile.absolutePath,
@@ -427,8 +372,8 @@ class DocumentRepository(
         Result.success(DocumentMappers.toDomain(updated ?: entity))
     }
 
-    suspend fun saveDocumentDirect(document: Document) {
-        documentDao.insertDocument(DocumentMappers.toEntity(document))
+    suspend fun saveDocumentDirect(document: Document, userId: String = "") {
+        documentDao.insertDocument(DocumentMappers.toEntity(document, userId))
     }
 
     suspend fun updateLastOpened(id: String, page: Int) {

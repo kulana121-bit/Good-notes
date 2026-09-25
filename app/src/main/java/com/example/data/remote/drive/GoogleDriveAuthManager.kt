@@ -47,15 +47,25 @@ class GoogleDriveAuthManager(private val context: Context) {
 
     /**
      * Checks whether Google Drive authorization currently exists for a signed-in Google Account.
+     * Validates matching with active Firebase user email to prevent cross-account uploads.
      */
-    fun checkDriveAuthorization(): DriveAuthState {
+    fun checkDriveAuthorization(expectedEmail: String? = null): DriveAuthState {
         return try {
             val account: GoogleSignInAccount? = GoogleSignIn.getLastSignedInAccount(context)
             if (account != null && GoogleSignIn.hasPermissions(account, SCOPE_DRIVE_FILE)) {
-                DriveAuthState.Connected(
-                    accountEmail = account.email ?: "Authorized Account",
-                    accountName = account.displayName
-                )
+                val driveEmail = account.email.orEmpty()
+                if (!expectedEmail.isNullOrBlank() && driveEmail.isNotBlank() && !driveEmail.equals(expectedEmail.trim(), ignoreCase = true)) {
+                    Log.w(tag, "Account mismatch: Drive email ($driveEmail) != Firebase active user email ($expectedEmail)")
+                    DriveAuthState.AccountMismatch(
+                        driveEmail = driveEmail,
+                        firebaseEmail = expectedEmail
+                    )
+                } else {
+                    DriveAuthState.Connected(
+                        accountEmail = if (driveEmail.isNotBlank()) driveEmail else "Authorized Account",
+                        accountName = account.displayName
+                    )
+                }
             } else {
                 DriveAuthState.Disconnected
             }

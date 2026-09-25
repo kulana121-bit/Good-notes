@@ -34,7 +34,7 @@ class GoogleDriveService(
     @Volatile
     private var cachedFolderStructure: DriveFolderStructure? = null
 
-    fun checkAuthorization(): DriveAuthState = authManager.checkDriveAuthorization()
+    fun checkAuthorization(expectedEmail: String? = null): DriveAuthState = authManager.checkDriveAuthorization(expectedEmail)
 
     /**
      * Retrieves actual authenticated user's Google Drive storage information using Drive API v3.

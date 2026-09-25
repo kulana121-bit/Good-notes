@@ -9,14 +9,16 @@ import com.squareup.moshi.JsonClass
 @Entity(
     tableName = "notes",
     indices = [
-        Index(value = ["isDeleted"]),
-        Index(value = ["isFavorite"]),
-        Index(value = ["folder"]),
-        Index(value = ["updatedAt"])
+        Index(value = ["userId"]),
+        Index(value = ["userId", "isDeleted"]),
+        Index(value = ["userId", "isFavorite"]),
+        Index(value = ["userId", "folder"]),
+        Index(value = ["userId", "updatedAt"])
     ]
 )
 data class NoteEntity(
     @PrimaryKey val id: String,
+    val userId: String = "",
     val title: String,
     val content: String = "",
     val cardType: String = "CREAM_LECTURE",

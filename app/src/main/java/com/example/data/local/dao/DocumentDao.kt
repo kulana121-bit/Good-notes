@@ -10,24 +10,24 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface DocumentDao {
-    @Query("SELECT * FROM documents WHERE isDeleted = 0 ORDER BY lastOpenedAt DESC")
-    fun getActiveDocuments(): Flow<List<DocumentEntity>>
+    @Query("SELECT * FROM documents WHERE userId = :userId AND isDeleted = 0 ORDER BY lastOpenedAt DESC")
+    fun getActiveDocuments(userId: String): Flow<List<DocumentEntity>>
 
-    @Query("SELECT * FROM documents WHERE isDeleted = 0 AND isFavorite = 1 ORDER BY lastOpenedAt DESC")
-    fun getFavoriteDocuments(): Flow<List<DocumentEntity>>
+    @Query("SELECT * FROM documents WHERE userId = :userId AND isDeleted = 0 AND isFavorite = 1 ORDER BY lastOpenedAt DESC")
+    fun getFavoriteDocuments(userId: String): Flow<List<DocumentEntity>>
 
-    @Query("SELECT * FROM documents WHERE isDeleted = 0 ORDER BY lastOpenedAt DESC LIMIT :limit")
-    fun getRecentDocuments(limit: Int = 10): Flow<List<DocumentEntity>>
+    @Query("SELECT * FROM documents WHERE userId = :userId AND isDeleted = 0 ORDER BY lastOpenedAt DESC LIMIT :limit")
+    fun getRecentDocuments(userId: String, limit: Int = 10): Flow<List<DocumentEntity>>
 
-    @Query("SELECT * FROM documents WHERE isDeleted = 1 ORDER BY updatedAt DESC")
-    fun getTrashDocuments(): Flow<List<DocumentEntity>>
+    @Query("SELECT * FROM documents WHERE userId = :userId AND isDeleted = 1 ORDER BY updatedAt DESC")
+    fun getTrashDocuments(userId: String): Flow<List<DocumentEntity>>
 
     @Query("""
         SELECT * FROM documents 
-        WHERE isDeleted = 0 AND (fileName LIKE '%' || :query || '%' OR displayName LIKE '%' || :query || '%')
+        WHERE userId = :userId AND isDeleted = 0 AND (fileName LIKE '%' || :query || '%' OR displayName LIKE '%' || :query || '%')
         ORDER BY lastOpenedAt DESC
     """)
-    fun searchDocuments(query: String): Flow<List<DocumentEntity>>
+    fun searchDocuments(userId: String, query: String): Flow<List<DocumentEntity>>
 
     @Query("SELECT * FROM documents WHERE id = :id LIMIT 1")
     fun getDocumentByIdFlow(id: String): Flow<DocumentEntity?>
@@ -35,23 +35,26 @@ interface DocumentDao {
     @Query("SELECT * FROM documents WHERE id = :id LIMIT 1")
     suspend fun getDocumentByIdDirect(id: String): DocumentEntity?
 
-    @Query("SELECT * FROM documents WHERE contentHash = :hash AND fileSize = :size AND isDeleted = 0 LIMIT 1")
-    suspend fun findDocumentByHashAndSize(hash: String, size: Long): DocumentEntity?
+    @Query("SELECT * FROM documents WHERE userId = :userId AND contentHash = :hash AND fileSize = :size AND isDeleted = 0 LIMIT 1")
+    suspend fun findDocumentByHashAndSize(userId: String, hash: String, size: Long): DocumentEntity?
 
     @Query("SELECT * FROM documents WHERE driveFileId = :driveFileId LIMIT 1")
     suspend fun findDocumentByDriveId(driveFileId: String): DocumentEntity?
 
-    @Query("SELECT * FROM documents WHERE uploadState = 'PENDING_UPLOAD' AND isDeleted = 0")
-    suspend fun getPendingUploadDocuments(): List<DocumentEntity>
+    @Query("SELECT * FROM documents WHERE userId = :userId AND uploadState = 'PENDING_UPLOAD' AND isDeleted = 0")
+    suspend fun getPendingUploadDocuments(userId: String): List<DocumentEntity>
 
-    @Query("SELECT * FROM documents WHERE downloadState = 'CLOUD_ONLY' AND isDeleted = 0")
-    suspend fun getCloudOnlyDocuments(): List<DocumentEntity>
+    @Query("SELECT * FROM documents WHERE userId = :userId AND downloadState = 'CLOUD_ONLY' AND isDeleted = 0")
+    suspend fun getCloudOnlyDocuments(userId: String): List<DocumentEntity>
 
-    @Query("SELECT * FROM documents WHERE remoteStorageRef IS NOT NULL AND driveFileId IS NULL AND isDeleted = 0")
-    suspend fun getDocumentsNeedingFirebaseMigration(): List<DocumentEntity>
+    @Query("SELECT * FROM documents WHERE userId = :userId AND remoteStorageRef IS NOT NULL AND driveFileId IS NULL AND isDeleted = 0")
+    suspend fun getDocumentsNeedingFirebaseMigration(userId: String): List<DocumentEntity>
+
+    @Query("SELECT * FROM documents WHERE userId = :userId")
+    suspend fun getAllDocumentsDirect(userId: String): List<DocumentEntity>
 
     @Query("SELECT * FROM documents")
-    suspend fun getAllDocumentsDirect(): List<DocumentEntity>
+    suspend fun getAllDocumentsUnfilteredDirect(): List<DocumentEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDocument(document: DocumentEntity)
@@ -120,15 +123,15 @@ interface DocumentDao {
     @Query("UPDATE documents SET thumbnailPath = :thumbnailPath WHERE id = :id")
     suspend fun updateThumbnail(id: String, thumbnailPath: String?)
 
-    @Query("SELECT COUNT(*) FROM documents WHERE isDeleted = 0")
-    fun getActiveDocumentsCount(): Flow<Int>
+    @Query("SELECT COUNT(*) FROM documents WHERE userId = :userId AND isDeleted = 0")
+    fun getActiveDocumentsCount(userId: String): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM documents WHERE isDeleted = 0")
-    suspend fun getActiveDocumentsCountDirect(): Int
+    @Query("SELECT COUNT(*) FROM documents WHERE userId = :userId AND isDeleted = 0")
+    suspend fun getActiveDocumentsCountDirect(userId: String): Int
 
-    @Query("SELECT SUM(fileSize) FROM documents WHERE isDeleted = 0")
-    fun getTotalDocumentsSize(): Flow<Long?>
+    @Query("SELECT SUM(fileSize) FROM documents WHERE userId = :userId AND isDeleted = 0")
+    fun getTotalDocumentsSize(userId: String): Flow<Long?>
 
-    @Query("SELECT SUM(fileSize) FROM documents WHERE isDeleted = 0")
-    suspend fun getTotalDocumentsSizeDirect(): Long?
+    @Query("SELECT SUM(fileSize) FROM documents WHERE userId = :userId AND isDeleted = 0")
+    suspend fun getTotalDocumentsSizeDirect(userId: String): Long?
 }

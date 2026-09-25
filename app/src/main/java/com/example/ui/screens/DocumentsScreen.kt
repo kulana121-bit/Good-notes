@@ -1,9 +1,6 @@
 package com.example.ui.screens
 
-import android.Manifest
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -22,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,9 +28,9 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.DeleteForever
-import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FileUpload
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.Refresh
@@ -53,7 +49,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,12 +60,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.example.data.model.Document
 import com.example.ui.components.StaggeredAnimatedItem
@@ -84,7 +77,7 @@ import java.io.File
 fun DocumentsScreen(
     documents: List<Document>,
     onImportDocument: (Uri) -> Unit,
-    onScanDeviceDocuments: ((Int) -> Unit) -> Unit,
+    onScanFolder: (treeUri: Uri, (Int) -> Unit) -> Unit,
     onDocumentClick: (Document) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onDeleteDocument: (String) -> Unit,
@@ -93,13 +86,13 @@ fun DocumentsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
     var isScanning by remember { mutableStateOf(false) }
     var documentToDelete by remember { mutableStateOf<Document?>(null) }
 
+    // Single PDF picker launcher
     val pdfPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -111,63 +104,21 @@ fun DocumentsScreen(
         }
     }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
+    // Modern Android Storage Access Framework directory picker
+    val folderTreeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri: Uri? ->
+        if (treeUri != null) {
             isScanning = true
-            onScanDeviceDocuments { count ->
+            onScanFolder(treeUri) { count ->
                 isScanning = false
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar(
-                        if (count > 0) "Found and indexed $count PDF documents. Stored locally & synced with Google Drive."
-                        else "No new PDFs found in standard folders. Tap 'Import PDF' to select a file."
+                        if (count > 0) "Found and indexed $count new PDF ${if (count == 1) "document" else "documents"}"
+                        else "No new PDF documents discovered in selected folder"
                     )
                 }
             }
-        } else {
-            coroutineScope.launch {
-                snackbarHostState.showSnackbar("Storage access permission required to scan device folders")
-            }
-        }
-    }
-
-    fun triggerDeviceScan() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+: MediaStore / storage files query can scan directly
-            isScanning = true
-            onScanDeviceDocuments { count ->
-                isScanning = false
-                coroutineScope.launch {
-                    snackbarHostState.showSnackbar(
-                        if (count > 0) "Found and indexed $count PDF documents. Stored locally & synced with Google Drive."
-                        else "No new PDFs found in standard folders. Tap 'Import PDF' to select a file."
-                    )
-                }
-            }
-        } else {
-            val hasPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-            if (hasPerm) {
-                isScanning = true
-                onScanDeviceDocuments { count ->
-                    isScanning = false
-                    coroutineScope.launch {
-                        snackbarHostState.showSnackbar(
-                            if (count > 0) "Found and indexed $count PDF documents. Stored locally & synced with Google Drive."
-                            else "No new PDFs found in standard folders. Tap 'Import PDF' to select a file."
-                        )
-                    }
-                }
-            } else {
-                permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-        }
-    }
-
-    // Auto-scan on first entrance if the document library is empty
-    LaunchedEffect(Unit) {
-        if (documents.isEmpty()) {
-            onScanDeviceDocuments {}
         }
     }
 
@@ -226,11 +177,11 @@ fun DocumentsScreen(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // Rescan button
+                    // Scan Folder button
                     IconButton(
                         onClick = {
                             if (!isScanning) {
-                                triggerDeviceScan()
+                                folderTreeLauncher.launch(null)
                             }
                         },
                         modifier = Modifier.size(40.dp)
@@ -243,8 +194,8 @@ fun DocumentsScreen(
                             )
                         } else {
                             Icon(
-                                imageVector = Icons.Outlined.Refresh,
-                                contentDescription = "Scan Device for PDFs",
+                                imageVector = Icons.Outlined.FolderOpen,
+                                contentDescription = "Scan Folder for PDFs",
                                 tint = MaterialTheme.colorScheme.onBackground
                             )
                         }
@@ -291,7 +242,7 @@ fun DocumentsScreen(
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text(
-                    text = "📁 Documents are stored in app storage & synced with Google Drive (NOTES/Documents).",
+                    text = "📁 Documents are securely stored in app storage & synced with Google Drive (NOTES/Documents).",
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = OutfitFontFamily,
                         fontSize = 11.5.sp,
@@ -338,7 +289,7 @@ fun DocumentsScreen(
                         )
 
                         Text(
-                            text = "Import a PDF file or scan your device to read, annotate, and sync directly with Google Drive.",
+                            text = "Import a PDF or select a folder to discover, read, annotate, and sync directly with Google Drive.",
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontFamily = OutfitFontFamily,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
@@ -348,10 +299,16 @@ fun DocumentsScreen(
 
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             OutlinedButton(
-                                onClick = { triggerDeviceScan() },
+                                onClick = { folderTreeLauncher.launch(null) },
                                 shape = RoundedCornerShape(20.dp)
                             ) {
-                                Text("Scan Device", fontFamily = OutfitFontFamily)
+                                Icon(
+                                    imageVector = Icons.Outlined.FolderOpen,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Scan Folder", fontFamily = OutfitFontFamily)
                             }
 
                             Button(
@@ -477,7 +434,6 @@ fun DocumentCardItem(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier.weight(1f)
             ) {
-                // Document Thumbnail or Stylish Icon
                 val hasThumb = doc.thumbnailPath != null && File(doc.thumbnailPath).exists()
                 Box(
                     modifier = Modifier
@@ -528,7 +484,6 @@ fun DocumentCardItem(
 
                     Spacer(modifier = Modifier.height(3.dp))
 
-                    // Sync & Drive status badge
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)

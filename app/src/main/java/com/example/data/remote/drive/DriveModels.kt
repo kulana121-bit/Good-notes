@@ -54,6 +54,10 @@ sealed class DriveAuthState {
         val accountEmail: String,
         val accountName: String? = null
     ) : DriveAuthState()
+    data class AccountMismatch(
+        val driveEmail: String,
+        val firebaseEmail: String
+    ) : DriveAuthState()
     data class Error(val message: String) : DriveAuthState()
 }
 

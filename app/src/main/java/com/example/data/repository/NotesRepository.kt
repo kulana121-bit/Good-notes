@@ -28,40 +28,43 @@ class NotesRepository(
     private val pendingSyncDao: PendingSyncDao = database.pendingSyncDao()
 ) {
 
-    val allNotes: Flow<List<Note>> = noteDao.getActiveNotes().map { entities ->
-        entities.map { NoteMappers.toDomain(it) }
-    }
+    fun getActiveNotes(userId: String): Flow<List<Note>> =
+        noteDao.getActiveNotes(userId).map { entities ->
+            entities.map { NoteMappers.toDomain(it) }
+        }
 
-    val favoriteNotes: Flow<List<Note>> = noteDao.getFavoriteNotes().map { entities ->
-        entities.map { NoteMappers.toDomain(it) }
-    }
+    fun getFavoriteNotes(userId: String): Flow<List<Note>> =
+        noteDao.getFavoriteNotes(userId).map { entities ->
+            entities.map { NoteMappers.toDomain(it) }
+        }
 
-    val trashNotes: Flow<List<Note>> = noteDao.getTrashNotes().map { entities ->
-        entities.map { NoteMappers.toDomain(it) }
-    }
+    fun getTrashNotes(userId: String): Flow<List<Note>> =
+        noteDao.getTrashNotes(userId).map { entities ->
+            entities.map { NoteMappers.toDomain(it) }
+        }
 
-    val allFolders: Flow<List<Folder>> = folderDao.getAllFolders().map { entities ->
-        entities.map { NoteMappers.toDomainFolder(it, 0) }
-    }
+    fun getFolders(userId: String): Flow<List<Folder>> =
+        folderDao.getAllFolders(userId).map { entities ->
+            entities.map { NoteMappers.toDomainFolder(it, 0) }
+        }
 
-    val folders: Flow<List<Folder>> = allFolders
+    fun getActiveNotesCount(userId: String): Flow<Int> = noteDao.getActiveNotesCount(userId)
+    fun getFavoritesCount(userId: String): Flow<Int> = noteDao.getFavoritesCount(userId)
+    fun getTrashCount(userId: String): Flow<Int> = noteDao.getTrashCount(userId)
+    fun getPendingOperationsCount(userId: String): Flow<Int> = pendingSyncDao.getPendingCount(userId)
 
-    val activeNotesCount: Flow<Int> = noteDao.getActiveNotesCount()
-    val favoritesCount: Flow<Int> = noteDao.getFavoritesCount()
-    val trashCount: Flow<Int> = noteDao.getTrashCount()
-
-    fun getNotesByFolder(folderName: String): Flow<List<Note>> {
-        return noteDao.getNotesByFolder(folderName).map { entities ->
+    fun getNotesByFolder(userId: String, folderName: String): Flow<List<Note>> {
+        return noteDao.getNotesByFolder(userId, folderName).map { entities ->
             entities.map { NoteMappers.toDomain(it) }
         }
     }
 
-    fun searchNotes(query: String): Flow<List<Note>> {
+    fun searchNotes(userId: String, query: String): Flow<List<Note>> {
         val trimmed = query.trim()
         return if (trimmed.isEmpty()) {
-            allNotes
+            getActiveNotes(userId)
         } else {
-            noteDao.searchNotes(trimmed).map { entities ->
+            noteDao.searchNotes(userId, trimmed).map { entities ->
                 entities.map { NoteMappers.toDomain(it) }
             }
         }
@@ -77,7 +80,7 @@ class NotesRepository(
         return noteDao.getNoteByIdDirect(id)?.let { NoteMappers.toDomain(it) }
     }
 
-    suspend fun saveNote(note: Note) {
+    suspend fun saveNote(note: Note, userId: String = "") {
         val existing = noteDao.getNoteByIdDirect(note.id)
         if (existing != null && existing.isDeleted && !note.isDeleted) {
             return
@@ -90,7 +93,7 @@ class NotesRepository(
             updatedAt = updatedTimestamp,
             updatedAtText = NoteMappers.formatTimestamp(updatedTimestamp)
         )
-        val entity = NoteMappers.toEntity(toSave).copy(
+        val entity = NoteMappers.toEntity(toSave, userId).copy(
             version = nextVersion,
             lastModifiedDeviceId = installationId,
             syncStatus = "PENDING_UPLOAD",
@@ -98,56 +101,57 @@ class NotesRepository(
         )
         noteDao.insertNote(entity)
         val opType = if (existing == null) "CREATE" else "UPDATE"
-        pendingSyncDao.enqueueCoalesced("NOTE", entity.id, opType)
+        pendingSyncDao.enqueueCoalesced(userId = userId, entityType = "NOTE", entityId = entity.id, operationType = opType)
     }
 
-    suspend fun toggleFavorite(noteId: String) {
+    suspend fun toggleFavorite(noteId: String, userId: String = "") {
         val current = noteDao.getNoteByIdDirect(noteId) ?: return
         val now = System.currentTimeMillis()
         noteDao.setFavorite(noteId, !current.isFavorite, now)
-        pendingSyncDao.enqueueCoalesced("NOTE", noteId, "UPDATE")
+        pendingSyncDao.enqueueCoalesced(userId = userId, entityType = "NOTE", entityId = noteId, operationType = "UPDATE")
     }
 
-    suspend fun softDeleteNote(noteId: String) {
+    suspend fun softDeleteNote(noteId: String, userId: String = "") {
         val now = System.currentTimeMillis()
         noteDao.softDeleteNote(noteId, now)
-        pendingSyncDao.enqueueCoalesced("NOTE", noteId, "DELETE")
+        pendingSyncDao.enqueueCoalesced(userId = userId, entityType = "NOTE", entityId = noteId, operationType = "DELETE")
     }
 
-    suspend fun restoreNote(noteId: String) {
+    suspend fun restoreNote(noteId: String, userId: String = "") {
         val now = System.currentTimeMillis()
         noteDao.restoreNote(noteId, now)
-        pendingSyncDao.enqueueCoalesced("NOTE", noteId, "UPDATE")
+        pendingSyncDao.enqueueCoalesced(userId = userId, entityType = "NOTE", entityId = noteId, operationType = "UPDATE")
     }
 
-    suspend fun permanentlyDeleteNote(noteId: String) {
+    suspend fun permanentlyDeleteNote(noteId: String, userId: String = "") {
         noteDao.permanentlyDeleteNote(noteId)
-        pendingSyncDao.enqueueCoalesced("NOTE", noteId, "DELETE")
+        pendingSyncDao.enqueueCoalesced(userId = userId, entityType = "NOTE", entityId = noteId, operationType = "DELETE")
     }
 
-    suspend fun emptyTrash() {
-        val trashNotes = database.noteDao().getAllNotesDirect().filter { it.isDeleted }
-        noteDao.emptyTrash()
+    suspend fun emptyTrash(userId: String) {
+        val trashNotes = database.noteDao().getAllNotesDirect(userId).filter { it.isDeleted }
+        noteDao.emptyTrash(userId)
         trashNotes.forEach { note ->
-            pendingSyncDao.enqueueCoalesced("NOTE", note.id, "DELETE")
+            pendingSyncDao.enqueueCoalesced(userId = userId, entityType = "NOTE", entityId = note.id, operationType = "DELETE")
         }
     }
 
-    suspend fun moveNoteToFolder(noteId: String, targetFolderName: String) {
+    suspend fun moveNoteToFolder(noteId: String, targetFolderName: String, userId: String = "") {
         val now = System.currentTimeMillis()
         noteDao.moveNoteToFolder(noteId, targetFolderName, now)
-        pendingSyncDao.enqueueCoalesced("NOTE", noteId, "UPDATE")
+        pendingSyncDao.enqueueCoalesced(userId = userId, entityType = "NOTE", entityId = noteId, operationType = "UPDATE")
     }
 
-    suspend fun createFolder(name: String, color: Color): Boolean {
+    suspend fun createFolder(name: String, color: Color, userId: String = ""): Boolean {
         val trimmed = name.trim()
         if (trimmed.isBlank()) return false
-        val existing = folderDao.getFolderByName(trimmed)
+        val existing = folderDao.getFolderByName(userId, trimmed)
         if (existing != null) return false
         val now = System.currentTimeMillis()
         val installationId = context?.let { DeviceIdentityManager.getInstallationId(it) } ?: ""
         val entity = FolderEntity(
             id = "folder_${UUID.randomUUID().toString().take(8)}",
+            userId = userId,
             name = trimmed,
             colorHex = color.value.toLong(),
             createdAt = now,
@@ -158,31 +162,31 @@ class NotesRepository(
             lastModifiedDeviceId = installationId
         )
         folderDao.insertFolder(entity)
-        pendingSyncDao.enqueueCoalesced("FOLDER", entity.id, "CREATE")
+        pendingSyncDao.enqueueCoalesced(userId = userId, entityType = "FOLDER", entityId = entity.id, operationType = "CREATE")
         return true
     }
 
-    suspend fun renameFolder(oldName: String, newName: String): Boolean {
+    suspend fun renameFolder(oldName: String, newName: String, userId: String = ""): Boolean {
         val trimmedNew = newName.trim()
         if (trimmedNew.isBlank() || oldName.equals(trimmedNew, ignoreCase = true)) {
             return false
         }
-        val existing = folderDao.getFolderByName(trimmedNew)
+        val existing = folderDao.getFolderByName(userId, trimmedNew)
         if (existing != null) return false
 
         val now = System.currentTimeMillis()
-        database.renameFolderWithNotes(oldName, trimmedNew, now)
-        val renamedFolder = folderDao.getFolderByName(trimmedNew)
+        database.renameFolderWithNotes(userId = userId, oldName = oldName, newName = trimmedNew, timestamp = now)
+        val renamedFolder = folderDao.getFolderByName(userId, trimmedNew)
         if (renamedFolder != null) {
-            pendingSyncDao.enqueueCoalesced("FOLDER", renamedFolder.id, "UPDATE")
+            pendingSyncDao.enqueueCoalesced(userId = userId, entityType = "FOLDER", entityId = renamedFolder.id, operationType = "UPDATE")
         }
         return true
     }
 
-    suspend fun deleteFolder(folderId: String, folderName: String, fallbackFolder: String = "Personal") {
+    suspend fun deleteFolder(folderId: String, folderName: String, fallbackFolder: String = "Personal", userId: String = "") {
         val now = System.currentTimeMillis()
-        database.deleteFolderSafely(folderId, folderName, fallbackFolder, now)
-        pendingSyncDao.enqueueCoalesced("FOLDER", folderId, "DELETE")
+        database.deleteFolderSafely(userId = userId, folderId = folderId, folderName = folderName, fallbackFolder = fallbackFolder, timestamp = now)
+        pendingSyncDao.enqueueCoalesced(userId = userId, entityType = "FOLDER", entityId = folderId, operationType = "DELETE")
     }
 
     // Settings
@@ -226,19 +230,14 @@ class NotesRepository(
     suspend fun setOnboardingCompleted() = setSetting("onboarding_completed", "true")
 
     /**
-     * Seeds initial folders if database is brand new.
+     * Seeds initial folders for this user if they don't have any folders.
      */
-    suspend fun seedInitialDataIfNeeded() {
-        val dummyIds = listOf("note_1", "note_2", "note_3", "note_4", "note_5", "note_6", "note_7", "note_8")
-        dummyIds.forEach { dummyId ->
-            noteDao.permanentlyDeleteNote(dummyId)
-        }
-
-        val folderCount = folderDao.getFolderCountDirect()
+    suspend fun seedInitialDataIfNeeded(userId: String = "") {
+        val folderCount = folderDao.getFolderCountDirect(userId)
         if (folderCount == 0) {
-            val folderEntities = SampleFolders.map { NoteMappers.toFolderEntity(it) }
+            val folderEntities = SampleFolders.map { NoteMappers.toFolderEntity(it, userId) }
             folderDao.insertFolders(folderEntities)
         }
-        settingDao.setSetting(SettingEntity("database_initialized", "true"))
+        settingDao.setSetting(SettingEntity("database_initialized_$userId", "true"))
     }
 }
